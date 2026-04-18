@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NetMantle</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header>
+  <h1>NetMantle</h1>
+  <nav id="nav" hidden>
+    <span id="who"></span>
+    <a href="/api/docs" target="_blank">API docs</a>
+    <button id="logout" type="button">Log out</button>
+  </nav>
+</header>
+
+<main>
+  <section id="login-view">
+    <h2>Sign in</h2>
+    <form id="login-form">
+      <label>Username <input name="username" required autocomplete="username"></label>
+      <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
+      <button type="submit">Log in</button>
+    </form>
+    <p id="login-error" class="error"></p>
+  </section>
+
+  <section id="app-view" hidden>
+    <div class="cols">
+      <aside>
+        <h2>Devices</h2>
+        <ul id="devices"></ul>
+        <details>
+          <summary>Add device</summary>
+          <form id="add-device-form">
+            <label>Hostname <input name="hostname" required></label>
+            <label>Address <input name="address" required></label>
+            <label>Port <input name="port" type="number" value="22"></label>
+            <label>Driver
+              <select name="driver" id="driver-select" required></select>
+            </label>
+            <label>Credential
+              <select name="credential_id" id="cred-select"></select>
+            </label>
+            <button type="submit">Create</button>
+          </form>
+        </details>
+        <details>
+          <summary>Add credential</summary>
+          <form id="add-cred-form">
+            <label>Name <input name="name" required></label>
+            <label>Username <input name="username" required></label>
+            <label>Password <input name="secret" type="password" required></label>
+            <button type="submit">Save</button>
+          </form>
+        </details>
+      </aside>
+
+      <article id="device-detail">
+        <p class="muted">Select a device on the left.</p>
+      </article>
+    </div>
+  </section>
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>

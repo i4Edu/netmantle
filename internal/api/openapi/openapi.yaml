@@ -1,0 +1,226 @@
+openapi: 3.0.3
+info:
+  title: NetMantle API
+  version: "0.1.0"
+  description: |
+    REST API for the NetMantle network configuration management platform.
+    All endpoints are prefixed with `/api/v1`. Authentication is via the
+    `netmantle_session` cookie obtained from `POST /auth/login`.
+servers:
+  - url: /api/v1
+security:
+  - cookieAuth: []
+paths:
+  /auth/login:
+    post:
+      summary: Log in
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/LoginRequest'}
+      responses:
+        '200': {description: Logged in, sets the session cookie}
+        '401': {description: Invalid credentials}
+  /auth/logout:
+    post:
+      summary: Log out the current session
+      responses:
+        '204': {description: Logged out}
+  /auth/me:
+    get:
+      summary: Return the authenticated user
+      responses:
+        '200':
+          description: The current user
+          content: {application/json: {schema: {$ref: '#/components/schemas/User'}}}
+  /devices:
+    get:
+      summary: List devices
+      responses:
+        '200':
+          description: Devices
+          content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Device'}}}}
+    post:
+      summary: Create a device
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/DeviceInput'}}}
+      responses:
+        '201':
+          description: Created
+          content: {application/json: {schema: {$ref: '#/components/schemas/Device'}}}
+  /devices/{id}:
+    get:
+      summary: Get a device
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Device'}}}}
+        '404': {description: Not found}
+    put:
+      summary: Update a device
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/DeviceInput'}}}
+      responses:
+        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Device'}}}}
+    delete:
+      summary: Delete a device
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses:
+        '204': {description: Deleted}
+  /devices/{id}/backup:
+    post:
+      summary: Trigger a backup of a device
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses:
+        '200':
+          description: Backup completed
+          content: {application/json: {schema: {$ref: '#/components/schemas/BackupRun'}}}
+  /devices/{id}/runs:
+    get:
+      summary: List recent backup runs for a device
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses:
+        '200':
+          description: Runs
+          content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/BackupRun'}}}}
+  /devices/{id}/config:
+    get:
+      summary: Get the latest stored configuration for a device
+      parameters:
+        - {$ref: '#/components/parameters/Id'}
+        - {in: query, name: artifact, schema: {type: string, default: running-config}}
+      responses:
+        '200':
+          description: Raw configuration text
+          content: {text/plain: {schema: {type: string}}}
+  /device-groups:
+    get:
+      summary: List device groups
+      responses:
+        '200':
+          description: Groups
+          content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Group'}}}}
+    post:
+      summary: Create a device group
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/GroupInput'}}}
+      responses:
+        '201':
+          description: Created
+          content: {application/json: {schema: {$ref: '#/components/schemas/Group'}}}
+  /credentials:
+    get:
+      summary: List credentials (metadata only — secrets never leave the server)
+      responses:
+        '200':
+          description: Credentials
+          content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Credential'}}}}
+    post:
+      summary: Create a credential
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/CredentialInput'}}}
+      responses:
+        '201':
+          description: Created
+          content: {application/json: {schema: {$ref: '#/components/schemas/Credential'}}}
+  /credentials/{id}:
+    delete:
+      summary: Delete a credential
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses:
+        '204': {description: Deleted}
+  /drivers:
+    get:
+      summary: List built-in drivers
+      responses:
+        '200':
+          description: Driver names
+          content: {application/json: {schema: {type: array, items: {type: string}}}}
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: netmantle_session
+  parameters:
+    Id:
+      in: path
+      name: id
+      required: true
+      schema: {type: integer, format: int64}
+  schemas:
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: {type: string}
+        password: {type: string, format: password}
+    User:
+      type: object
+      properties:
+        id: {type: integer, format: int64}
+        tenant_id: {type: integer, format: int64}
+        username: {type: string}
+        role: {type: string, enum: [admin, operator, viewer]}
+    DeviceInput:
+      type: object
+      required: [hostname, address, driver]
+      properties:
+        hostname: {type: string}
+        address: {type: string}
+        port: {type: integer, default: 22}
+        driver: {type: string}
+        group_id: {type: integer, format: int64, nullable: true}
+        credential_id: {type: integer, format: int64, nullable: true}
+    Device:
+      allOf:
+        - {$ref: '#/components/schemas/DeviceInput'}
+        - type: object
+          properties:
+            id: {type: integer, format: int64}
+            tenant_id: {type: integer, format: int64}
+            created_at: {type: string, format: date-time}
+    GroupInput:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string}
+    Group:
+      allOf:
+        - {$ref: '#/components/schemas/GroupInput'}
+        - type: object
+          properties:
+            id: {type: integer, format: int64}
+            tenant_id: {type: integer, format: int64}
+            created_at: {type: string, format: date-time}
+    CredentialInput:
+      type: object
+      required: [name, username, secret]
+      properties:
+        name: {type: string}
+        username: {type: string}
+        secret: {type: string, format: password, description: 'Plaintext on the wire; encrypted at rest.'}
+    Credential:
+      type: object
+      properties:
+        id: {type: integer, format: int64}
+        tenant_id: {type: integer, format: int64}
+        name: {type: string}
+        username: {type: string}
+        created_at: {type: string, format: date-time}
+    BackupRun:
+      type: object
+      properties:
+        id: {type: integer, format: int64}
+        device_id: {type: integer, format: int64}
+        started_at: {type: string, format: date-time}
+        finished_at: {type: string, format: date-time}
+        status: {type: string, enum: [running, success, failed]}
+        error: {type: string, nullable: true}
+        commit_sha: {type: string, nullable: true}
