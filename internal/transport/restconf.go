@@ -112,7 +112,7 @@ func restconfPathFromCommand(cmd string) (string, error) {
 	case "get-config", "get-config:running":
 		return "/data", nil
 	case "get-config:candidate":
-		return "/data?content=candidate"
+		return "/data?content=candidate", nil
 	}
 	if strings.HasPrefix(c, "get-config:") {
 		p := strings.TrimPrefix(c, "get-config:")

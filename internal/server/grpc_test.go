@@ -1,9 +1,9 @@
 package server
 
 import (
-	"crypto/tls"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -45,7 +45,7 @@ func TestLoadMTLSConfigEnforcesClientCertVerification(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadMTLSConfig: %v", err)
 	}
-	if cfg.ClientAuth != x509.RequireAndVerifyClientCert {
+	if cfg.ClientAuth != tls.RequireAndVerifyClientCert {
 		t.Fatalf("expected ClientAuth RequireAndVerifyClientCert, got %v", cfg.ClientAuth)
 	}
 	if cfg.MinVersion != tls.VersionTLS13 {
@@ -63,12 +63,12 @@ func mustNewCA(t *testing.T) ([]byte, *rsa.PrivateKey) {
 		t.Fatal(err)
 	}
 	tpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "test-ca"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-		IsCA:         true,
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "test-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		IsCA:                  true,
 		BasicConstraintsValid: true,
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, &key.PublicKey, key)

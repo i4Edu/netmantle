@@ -70,11 +70,11 @@ func DialGNMI(ctx context.Context, cfg GNMIConfig) (drivers.Session, func() erro
 		return nil, nil, fmt.Errorf("transport/gnmi: dial: %w", err)
 	}
 	return &gnmiSession{
-			getter:      gpb.NewGNMIClient(conn),
-			username:    cfg.Username,
-			password:    cfg.Password,
-			bearerToken: cfg.BearerToken,
-		}, conn.Close, nil
+		getter:      gpb.NewGNMIClient(conn),
+		username:    cfg.Username,
+		password:    cfg.Password,
+		bearerToken: cfg.BearerToken,
+	}, conn.Close, nil
 }
 
 func (s *gnmiSession) Run(ctx context.Context, cmd string) (string, error) {
