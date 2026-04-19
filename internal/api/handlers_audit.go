@@ -61,7 +61,7 @@ func (s *server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 	if v := q.Get("limit"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n <= 0 {
-			writeError(w, http.StatusBadRequest, "invalid limit")
+			writeError(w, http.StatusBadRequest, "invalid limit (must be a positive integer, max 500)")
 			return
 		}
 		f.Limit = n
@@ -69,7 +69,7 @@ func (s *server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 	if v := q.Get("offset"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 {
-			writeError(w, http.StatusBadRequest, "invalid offset")
+			writeError(w, http.StatusBadRequest, "invalid offset (must be a non-negative integer)")
 			return
 		}
 		f.Offset = n
