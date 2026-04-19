@@ -47,15 +47,15 @@ build step, no third-party CSS); see
 and [docs/user-guide.md](docs/user-guide.md) for step-by-step walkthroughs.
 
 > The screenshots below were captured against the current theme. Sections
-> that haven't been refreshed yet (Backups, Topology, Approvals, Device
-> detail, Prometheus metrics) are marked inline.
+> that haven't been refreshed yet (Empty inventory, Device detail, Backups,
+> Approvals, Topology, Prometheus metrics) are marked inline.
 
 ### Sign-in
 
 The bootstrap admin password is printed once on first start, or pre-seeded via
 `NETMANTLE_BOOTSTRAP_ADMIN_PASSWORD`. The sign-in card now carries the
-brand mark, a tagline, and a hint pointing to the bootstrap-password
-environment variable.
+brand mark, a tagline, and a hint pointing to
+`NETMANTLE_BOOTSTRAP_ADMIN_PASSWORD`.
 
 ![Sign-in screen](https://github.com/user-attachments/assets/6621033a-3e16-449d-95e1-18ae6e02a75c)
 
@@ -69,14 +69,14 @@ failure zeroes that field but the response stays 200.
 
 ![Dashboard with stat tiles, status-by-driver bars, recent events, and health card](https://github.com/user-attachments/assets/a54c9c19-7b6e-410a-96b3-dedd1bf1f376)
 
-### Empty dashboard (first login)
+### Empty inventory (first login)
 
 Two-pane Inventory layout: the left rail lists devices and exposes the
 **Add device** and **Add credential** forms; the right pane shows device detail.
 
 > Pending a refresh against the current theme.
 
-![Empty dashboard after first login](https://github.com/user-attachments/assets/50200d85-ac6d-4f03-ae93-56568e3ffc80)
+![Empty inventory after first login](https://github.com/user-attachments/assets/50200d85-ac6d-4f03-ae93-56568e3ffc80)
 
 ### Devices list with the Add device form open
 
