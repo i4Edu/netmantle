@@ -14,10 +14,12 @@ import (
 	"time"
 
 	"github.com/i4Edu/netmantle/internal/api"
+	"github.com/i4Edu/netmantle/internal/apitokens"
 	"github.com/i4Edu/netmantle/internal/audit"
 	"github.com/i4Edu/netmantle/internal/auth"
 	"github.com/i4Edu/netmantle/internal/automation"
 	"github.com/i4Edu/netmantle/internal/backup"
+	"github.com/i4Edu/netmantle/internal/changereq"
 	"github.com/i4Edu/netmantle/internal/changes"
 	"github.com/i4Edu/netmantle/internal/compliance"
 	"github.com/i4Edu/netmantle/internal/config"
@@ -158,14 +160,25 @@ func runServe(argv []string) error {
 		if dev.CredentialID == nil {
 			return nil, errors.New("device has no credential")
 		}
-		user, pw, err := credRepo.Reveal(ctx, tenantID, *dev.CredentialID)
+		// Use scopes the cleartext to the dial call: the SSH transport
+		// holds the negotiated session, so the password byte slice can
+		// be zeroised immediately on return.
+		var backend terminal.Backend
+		err = credRepo.Use(ctx, tenantID, *dev.CredentialID, func(user, pw string) error {
+			b, derr := transport.DialSSHShell(ctx, transport.SSHConfig{
+				Address: dev.Address, Port: dev.Port,
+				Username: user, Password: pw, Timeout: cfg.Backup.Timeout,
+			})
+			if derr != nil {
+				return derr
+			}
+			backend = b
+			return nil
+		})
 		if err != nil {
 			return nil, err
 		}
-		return transport.DialSSHShell(ctx, transport.SSHConfig{
-			Address: dev.Address, Port: dev.Port,
-			Username: user, Password: pw, Timeout: cfg.Backup.Timeout,
-		})
+		return backend, nil
 	})
 	automationSvc := automation.New(db, devRepo, func(ctx context.Context, d devices.Device, _ string) (string, error) {
 		// Live execution requires a per-driver Apply hook; this MVP returns
@@ -208,6 +221,8 @@ func runServe(argv []string) error {
 	}
 
 	metrics := observability.New()
+	changeReqSvc := changereq.New(db)
+	apiTokensSvc := apitokens.New(db)
 	handler := api.NewServer(api.Deps{
 		Auth: authSvc, Devices: devRepo, Credentials: credRepo,
 		Backup: bSvc, Logger: log, Metrics: metrics, Audit: auditSvc,
@@ -215,7 +230,9 @@ func runServe(argv []string) error {
 		Compliance: complianceSvc, Discovery: discoverySvc,
 		Automation: automationSvc, Probes: probesSvc,
 		Tenants: tenantsSvc, Pollers: pollerSvc,
-		Terminal: terminalSvc, GitOps: gitopsSvc, DB: db,
+		Terminal: terminalSvc, GitOps: gitopsSvc,
+		ChangeReq: changeReqSvc, APITokens: apiTokensSvc,
+		DB: db,
 	})
 
 	srv := &http.Server{

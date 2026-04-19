@@ -51,6 +51,7 @@ type Entry struct {
 	Target      string    `json:"target,omitempty"`
 	Detail      string    `json:"detail,omitempty"`
 	Source      string    `json:"source,omitempty"`
+	RequestID   string    `json:"request_id,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 }
 
@@ -60,21 +61,32 @@ type Entry struct {
 // tenantID and actorUserID may be 0 to record a NULL (e.g. for
 // system-initiated actions before a tenant is established).
 func (s *Service) Record(ctx context.Context, tenantID, actorUserID int64, source, action, target, detail string) {
+	s.RecordWithRequest(ctx, tenantID, actorUserID, "", source, action, target, detail)
+}
+
+// RecordWithRequest is like Record but also stores a per-request
+// correlation id (typically the X-Request-ID header value). Use this
+// from API handlers so every audit row a single HTTP call produces can
+// be retrieved as a coherent timeline.
+func (s *Service) RecordWithRequest(ctx context.Context, tenantID, actorUserID int64, requestID, source, action, target, detail string) {
 	if s == nil || s.DB == nil {
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	var t, u any
+	var t, u, rid any
 	if tenantID > 0 {
 		t = tenantID
 	}
 	if actorUserID > 0 {
 		u = actorUserID
 	}
+	if requestID != "" {
+		rid = requestID
+	}
 	if _, err := s.DB.ExecContext(ctx,
-		`INSERT INTO audit_log(tenant_id, user_id, actor_user_id, action, target, detail, source, created_at)
-		 VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
-		t, u, u, action, target, detail, source, now); err != nil {
+		`INSERT INTO audit_log(tenant_id, user_id, actor_user_id, action, target, detail, source, request_id, created_at)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		t, u, u, action, target, detail, source, rid, now); err != nil {
 		s.Logger.Warn("audit write failed",
 			"err", err, "action", action, "target", target)
 	}
@@ -86,6 +98,7 @@ type ListFilter struct {
 	ActorUserID int64
 	Action      string // exact match
 	Target      string // substring (LIKE %target%)
+	RequestID   string // exact match on request_id
 	Since       time.Time
 	Until       time.Time
 	Limit       int
@@ -115,6 +128,10 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]Entry, error) {
 		where = append(where, "target LIKE ?")
 		args = append(args, "%"+f.Target+"%")
 	}
+	if f.RequestID != "" {
+		where = append(where, "request_id = ?")
+		args = append(args, f.RequestID)
+	}
 	if !f.Since.IsZero() {
 		where = append(where, "created_at >= ?")
 		args = append(args, f.Since.UTC().Format(time.RFC3339))
@@ -129,6 +146,7 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]Entry, error) {
 	}
 	q := `SELECT id, tenant_id, actor_user_id, action,
 	             COALESCE(target,''), COALESCE(detail,''), COALESCE(source,''),
+	             COALESCE(request_id,''),
 	             created_at
 	      FROM audit_log`
 	if len(where) > 0 {
@@ -152,7 +170,7 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]Entry, error) {
 			ts       string
 		)
 		if err := rows.Scan(&e.ID, &tenantID, &actorID, &e.Action,
-			&e.Target, &e.Detail, &e.Source, &ts); err != nil {
+			&e.Target, &e.Detail, &e.Source, &e.RequestID, &ts); err != nil {
 			return nil, err
 		}
 		if tenantID.Valid {

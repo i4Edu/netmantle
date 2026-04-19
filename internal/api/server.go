@@ -18,10 +18,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/i4Edu/netmantle/internal/apitokens"
 	"github.com/i4Edu/netmantle/internal/audit"
 	"github.com/i4Edu/netmantle/internal/auth"
 	"github.com/i4Edu/netmantle/internal/automation"
 	"github.com/i4Edu/netmantle/internal/backup"
+	"github.com/i4Edu/netmantle/internal/changereq"
 	"github.com/i4Edu/netmantle/internal/changes"
 	"github.com/i4Edu/netmantle/internal/compliance"
 	"github.com/i4Edu/netmantle/internal/credentials"
@@ -66,6 +68,11 @@ type Deps struct {
 	Pollers    *poller.Service
 	Terminal   *terminal.Service
 	GitOps     *gitops.Service
+
+	// Phase A..E feature services. Each is optional so existing
+	// integration tests that only wire the minimum continue to work.
+	ChangeReq *changereq.Service
+	APITokens *apitokens.Service
 
 	DB any // *sql.DB; opaque here to avoid an import cycle
 }
@@ -151,7 +158,9 @@ func NewServer(d Deps) http.Handler {
 		mux.Handle("GET /api/v1/push/jobs", s.auth(s.handleListPushJobs))
 		mux.Handle("POST /api/v1/push/jobs", s.auth(s.requireWrite(s.handleCreatePushJob)))
 		mux.Handle("POST /api/v1/push/jobs/{id}/preview", s.auth(s.handlePreviewPush))
-		mux.Handle("POST /api/v1/push/jobs/{id}/run", s.auth(s.requireWrite(s.handleRunPush)))
+		// Direct push requires admin role (or the apply:direct API-token
+		// scope). Other callers must go through the change-request flow.
+		mux.Handle("POST /api/v1/push/jobs/{id}/run", s.auth(s.requireWrite(s.handleRunPushGuarded)))
 	}
 
 	// Phase 7 — pollers + in-app CLI.
@@ -187,11 +196,33 @@ func NewServer(d Deps) http.Handler {
 		mux.Handle("PUT /api/v1/gitops/mirror", s.auth(s.requireAdmin(s.handlePutMirror)))
 	}
 
+	// Approval workflow + rollback (Phases B & D).
+	if d.ChangeReq != nil {
+		mux.Handle("GET /api/v1/change-requests", s.auth(s.handleListChangeRequests))
+		mux.Handle("POST /api/v1/change-requests", s.auth(s.requireWrite(s.handleCreateChangeRequest)))
+		mux.Handle("GET /api/v1/change-requests/{id}", s.auth(s.handleGetChangeRequest))
+		mux.Handle("POST /api/v1/change-requests/{id}/submit", s.auth(s.requireWrite(s.handleSubmitChangeRequest)))
+		mux.Handle("POST /api/v1/change-requests/{id}/approve", s.auth(s.requireAdmin(s.handleApproveChangeRequest)))
+		mux.Handle("POST /api/v1/change-requests/{id}/reject", s.auth(s.requireAdmin(s.handleRejectChangeRequest)))
+		mux.Handle("POST /api/v1/change-requests/{id}/cancel", s.auth(s.requireWrite(s.handleCancelChangeRequest)))
+		mux.Handle("POST /api/v1/change-requests/{id}/apply", s.auth(s.requireWrite(s.handleApplyChangeRequest)))
+		if d.Backup != nil {
+			mux.Handle("POST /api/v1/devices/{id}/rollback", s.auth(s.requireWrite(s.handleRollbackDevice)))
+		}
+	}
+
+	// API tokens for machine-to-machine integrations (Phase E).
+	if d.APITokens != nil {
+		mux.Handle("GET /api/v1/api-tokens", s.auth(s.handleListAPITokens))
+		mux.Handle("POST /api/v1/api-tokens", s.auth(s.requireWrite(s.handleCreateAPIToken)))
+		mux.Handle("DELETE /api/v1/api-tokens/{id}", s.auth(s.requireWrite(s.handleDeleteAPIToken)))
+	}
+
 	// Embedded UI (single-page).
 	mux.Handle("GET /", web.Handler())
 
-	// Wrap with logging + metrics.
-	return s.recover(s.logRequests(s.metrics(mux)))
+	// Wrap with request-id propagation (innermost) + logging + metrics.
+	return s.recover(s.logRequests(s.metrics(s.withRequestID(mux))))
 }
 
 type server struct {
@@ -252,9 +283,27 @@ func (s *server) auth(h http.HandlerFunc) http.Handler {
 	return s.authH(http.HandlerFunc(h))
 }
 
-// authH wraps any http.Handler with session authentication.
+// authH wraps any http.Handler with session authentication. As of the
+// API-tokens phase, this also accepts an `Authorization: Bearer …`
+// header issued via /api/v1/api-tokens; cookie auth keeps working
+// unchanged for the embedded UI.
 func (s *server) authH(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 1. Bearer token (if APITokens is configured and a header is present).
+		if tok := bearerFromHeader(r); tok != "" && s.APITokens != nil {
+			t, err := s.APITokens.Authenticate(r.Context(), tok)
+			if err == nil {
+				if u := s.userFromAPIToken(r.Context(), t); u != nil {
+					ctx := context.WithValue(r.Context(), userKey, u)
+					ctx = context.WithValue(ctx, scopesKey, t.Scopes)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+			}
+			// Fall through to cookie auth on failure (e.g. revoked
+			// token alongside a still-valid session).
+		}
+		// 2. Cookie session.
 		c, err := r.Cookie(s.Auth.CookieName())
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "authentication required")
@@ -295,6 +344,8 @@ func (s *server) requireAdmin(h http.HandlerFunc) http.HandlerFunc {
 // recordAudit writes a row to audit_log if the audit service is configured.
 // The source defaults to "api"; callers using a different channel (e.g. UI
 // vs. a future webhook) may pass an explicit value through audit.Record.
+// The per-request correlation id (X-Request-ID) is propagated automatically
+// so all audit rows produced by a single HTTP call share a request_id.
 func (s *server) recordAudit(r *http.Request, action, target, detail string) {
 	if s.Audit == nil {
 		return
@@ -305,8 +356,8 @@ func (s *server) recordAudit(r *http.Request, action, target, detail string) {
 		tenantID = u.TenantID
 		actorID = u.ID
 	}
-	s.Audit.Record(r.Context(), tenantID, actorID, audit.SourceAPI,
-		action, target, detail)
+	s.Audit.RecordWithRequest(r.Context(), tenantID, actorID,
+		requestIDFrom(r.Context()), audit.SourceAPI, action, target, detail)
 }
 
 // ---------------- handlers ----------------
