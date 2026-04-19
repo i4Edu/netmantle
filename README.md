@@ -35,6 +35,49 @@ What's in the box:
 ⚠️ Early development. APIs and storage formats may change before the first
 tagged release. Do not yet rely on it for production.
 
+## Screenshots
+
+A short tour of the embedded web UI and operator endpoints. See
+[docs/user-guide.md](docs/user-guide.md) for step-by-step walkthroughs.
+
+### Sign-in
+
+The bootstrap admin password is printed once on first start, or pre-seeded via
+`NETMANTLE_BOOTSTRAP_ADMIN_PASSWORD`.
+
+![Sign-in screen](https://github.com/user-attachments/assets/c1ce27f8-93a1-49ab-8cf8-a344d3829b56)
+
+### Empty dashboard (first login)
+
+Two-pane layout: the left rail lists devices and exposes the **Add device** and
+**Add credential** forms; the right pane shows device detail.
+
+![Empty dashboard after first login](https://github.com/user-attachments/assets/aeb253c3-1106-491e-b574-44e3fe6e8211)
+
+### Devices list with the Add device form open
+
+The driver dropdown is populated dynamically from the registered drivers
+(Cisco IOS / IOS-XR / NX-OS / NETCONF, Arista EOS, Junos CLI/NETCONF,
+MikroTik RouterOS, Nokia SR OS, gNMI, RESTCONF, generic SSH, and several
+ONT/OLT drivers).
+
+![Devices list with Add device form expanded](https://github.com/user-attachments/assets/17f115ae-a7c9-46cf-b090-c2e6fc464005)
+
+### Device detail
+
+Clicking a device shows the latest stored configuration, recent run history,
+and **Backup now** / **Delete** controls.
+
+![Device detail pane](https://github.com/user-attachments/assets/05e87d3a-ace8-47c2-9553-27493b2a6c33)
+
+### Prometheus metrics
+
+`/metrics` exposes Go runtime metrics plus NetMantle-specific counters
+(uptime, HTTP request totals and latency histograms, backup outcomes, …) ready
+to be scraped by Prometheus.
+
+![Prometheus metrics endpoint](https://github.com/user-attachments/assets/51f690cf-2c98-4a54-8fc2-3d4366b55b16)
+
 ## Quickstart
 
 ```bash
@@ -75,10 +118,12 @@ docker run --rm -p 8080:8080 -v $(pwd)/data:/var/lib/netmantle \
 Authenticate by `POST /api/v1/auth/login` and use the returned cookie for
 subsequent requests.
 
-## Architecture
+## Documentation
 
-See [docs/architecture.md](docs/architecture.md) and the ADRs under
-[docs/adr/](docs/adr).
+- [User guide](docs/user-guide.md) — install, first login, day-to-day workflows
+- [Architecture](docs/architecture.md) and the ADRs under [docs/adr/](docs/adr)
+- [Roadmap](docs/roadmap.md) — what shipped vs. what is still scaffolded
+- [Driver SDK](docs/driver-sdk.md)
 
 ## Development
 
