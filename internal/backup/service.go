@@ -32,8 +32,19 @@ type Service struct {
 	Timeout     time.Duration
 	NewSession  SessionFactory
 
+	// PostCommit is invoked once per successful, content-changing backup.
+	// It runs in the request goroutine but uses a detached background
+	// context so it cannot extend the caller's deadline. Hooks should be
+	// fast and non-blocking; expensive work belongs on the queue.
+	PostCommit []PostCommitHook
+
 	sem chan struct{} // bounds concurrent backups
 }
+
+// PostCommitHook is fired after each backup that produced a new commit.
+// `artifacts` are the just-stored artefacts (name + content). Implementations
+// must be safe for concurrent invocation.
+type PostCommitHook func(ctx context.Context, tenantID int64, dev devices.Device, sha string, artifacts []configstore.Artifact)
 
 // New constructs a Service with the given concurrency limit.
 func New(d *devices.Repo, c *credentials.Repo, s *configstore.Store, db *sql.DB, log *slog.Logger, timeout time.Duration, workers int, fn SessionFactory) *Service {
@@ -156,6 +167,16 @@ func (s *Service) BackupNow(ctx context.Context, tenantID, deviceID int64, actor
 				`INSERT INTO config_versions(device_id, artifact, commit_sha, size_bytes, created_at) VALUES(?, ?, ?, ?, ?)`,
 				dev.ID, a.Name, cr.SHA, len(a.Content), now.Format(time.RFC3339)); err != nil {
 				s.Logger.Warn("insert config_version failed", "err", err)
+			}
+		}
+		// Run post-commit hooks (changes, search index, compliance, …) in a
+		// detached context so they can outlive the request without inheriting
+		// its deadline. Errors are logged inside each hook.
+		if len(s.PostCommit) > 0 {
+			hookCtx, hookCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer hookCancel()
+			for _, h := range s.PostCommit {
+				h(hookCtx, tenantID, dev, sha, storeArts)
 			}
 		}
 	}

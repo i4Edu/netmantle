@@ -12,15 +12,15 @@ import (
 
 // Event is a recorded change between two config versions.
 type Event struct {
-	ID         int64     `json:"id"`
-	DeviceID   int64     `json:"device_id"`
-	Artifact   string    `json:"artifact"`
-	OldSHA     string    `json:"old_sha,omitempty"`
-	NewSHA     string    `json:"new_sha"`
-	Added      int       `json:"added_lines"`
-	Removed    int       `json:"removed_lines"`
-	Reviewed   bool      `json:"reviewed"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID        int64     `json:"id"`
+	DeviceID  int64     `json:"device_id"`
+	Artifact  string    `json:"artifact"`
+	OldSHA    string    `json:"old_sha,omitempty"`
+	NewSHA    string    `json:"new_sha"`
+	Added     int       `json:"added_lines"`
+	Removed   int       `json:"removed_lines"`
+	Reviewed  bool      `json:"reviewed"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // Service writes change events and exposes diff queries.

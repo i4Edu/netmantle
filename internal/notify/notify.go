@@ -177,7 +177,7 @@ func (s *Service) ListRules(ctx context.Context, tenantID int64) ([]map[string]a
 	var out []map[string]any
 	for rows.Next() {
 		var (
-			id, ch                 int64
+			id, ch                  int64
 			name, evType, createdAt string
 		)
 		if err := rows.Scan(&id, &name, &evType, &ch, &createdAt); err != nil {

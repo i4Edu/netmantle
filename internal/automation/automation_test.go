@@ -43,7 +43,7 @@ func TestPreviewAndRun(t *testing.T) {
 
 	job, err := svc.CreateJob(context.Background(), Job{
 		TenantID: tid, Name: "set-banner",
-		Template: "banner motd ^C welcome to {{.Device.Hostname}} {{.Vars.env}}^C",
+		Template:  "banner motd ^C welcome to {{.Device.Hostname}} {{.Vars.env}}^C",
 		Variables: map[string]string{"env": "prod"},
 	})
 	if err != nil {

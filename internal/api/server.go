@@ -18,11 +18,22 @@ import (
 	"time"
 
 	"github.com/i4Edu/netmantle/internal/auth"
+	"github.com/i4Edu/netmantle/internal/automation"
 	"github.com/i4Edu/netmantle/internal/backup"
+	"github.com/i4Edu/netmantle/internal/changes"
+	"github.com/i4Edu/netmantle/internal/compliance"
 	"github.com/i4Edu/netmantle/internal/credentials"
 	"github.com/i4Edu/netmantle/internal/devices"
+	"github.com/i4Edu/netmantle/internal/discovery"
 	"github.com/i4Edu/netmantle/internal/drivers"
+	"github.com/i4Edu/netmantle/internal/gitops"
+	"github.com/i4Edu/netmantle/internal/notify"
 	"github.com/i4Edu/netmantle/internal/observability"
+	"github.com/i4Edu/netmantle/internal/poller"
+	"github.com/i4Edu/netmantle/internal/probes"
+	"github.com/i4Edu/netmantle/internal/search"
+	"github.com/i4Edu/netmantle/internal/tenants"
+	"github.com/i4Edu/netmantle/internal/terminal"
 	"github.com/i4Edu/netmantle/internal/version"
 	"github.com/i4Edu/netmantle/internal/web"
 )
@@ -38,6 +49,22 @@ type Deps struct {
 	Backup      *backup.Service
 	Logger      *slog.Logger
 	Metrics     *observability.Metrics
+
+	// Optional Phase 2..10 services. Endpoints registered for each are only
+	// installed when the corresponding pointer is non-nil.
+	Changes    *changes.Service
+	Notify     *notify.Service
+	Search     *search.Service
+	Compliance *compliance.Service
+	Discovery  *discovery.Service
+	Automation *automation.Service
+	Probes     *probes.Service
+	Tenants    *tenants.Service
+	Pollers    *poller.Service
+	Terminal   *terminal.Service
+	GitOps     *gitops.Service
+
+	DB any // *sql.DB; opaque here to avoid an import cycle
 }
 
 // NewServer returns a configured *http.ServeMux. The caller wraps it in a
@@ -75,6 +102,83 @@ func NewServer(d Deps) http.Handler {
 	mux.Handle("GET /api/v1/credentials", s.auth(s.handleListCredentials))
 	mux.Handle("POST /api/v1/credentials", s.auth(s.requireWrite(s.handleCreateCredential)))
 	mux.Handle("DELETE /api/v1/credentials/{id}", s.auth(s.requireWrite(s.handleDeleteCredential)))
+
+	// Phase 2 — changes & notifications.
+	if d.Changes != nil {
+		mux.Handle("GET /api/v1/changes", s.auth(s.handleListChanges))
+		mux.Handle("GET /api/v1/changes/{id}/diff", s.auth(s.handleChangeDiff))
+		mux.Handle("POST /api/v1/changes/{id}/review", s.auth(s.requireWrite(s.handleMarkReviewed)))
+	}
+	if d.Notify != nil {
+		mux.Handle("GET /api/v1/notifications/channels", s.auth(s.handleListChannels))
+		mux.Handle("POST /api/v1/notifications/channels", s.auth(s.requireWrite(s.handleCreateChannel)))
+		mux.Handle("DELETE /api/v1/notifications/channels/{id}", s.auth(s.requireWrite(s.handleDeleteChannel)))
+		mux.Handle("GET /api/v1/notifications/rules", s.auth(s.handleListRules))
+		mux.Handle("POST /api/v1/notifications/rules", s.auth(s.requireWrite(s.handleCreateRule)))
+	}
+
+	// Phase 3 — search & saved searches.
+	if d.Search != nil {
+		mux.Handle("GET /api/v1/search", s.auth(s.handleSearch))
+		mux.Handle("GET /api/v1/search/saved", s.auth(s.handleListSaved))
+		mux.Handle("POST /api/v1/search/saved", s.auth(s.requireWrite(s.handleSaveSearch)))
+		mux.Handle("GET /api/v1/changes.csv", s.auth(s.handleChangesCSV))
+	}
+
+	// Phase 4 — compliance.
+	if d.Compliance != nil {
+		mux.Handle("GET /api/v1/compliance/rules", s.auth(s.handleListComplianceRules))
+		mux.Handle("POST /api/v1/compliance/rules", s.auth(s.requireWrite(s.handleCreateComplianceRule)))
+		mux.Handle("DELETE /api/v1/compliance/rules/{id}", s.auth(s.requireWrite(s.handleDeleteComplianceRule)))
+		mux.Handle("GET /api/v1/compliance/findings", s.auth(s.handleListFindings))
+	}
+
+	// Phase 5 — discovery.
+	if d.Discovery != nil {
+		mux.Handle("POST /api/v1/discovery/scans", s.auth(s.requireWrite(s.handleStartScan)))
+		mux.Handle("POST /api/v1/discovery/import/netbox", s.auth(s.requireWrite(s.handleImportNetBox)))
+	}
+
+	// Phase 6 — push automation.
+	if d.Automation != nil {
+		mux.Handle("GET /api/v1/push/jobs", s.auth(s.handleListPushJobs))
+		mux.Handle("POST /api/v1/push/jobs", s.auth(s.requireWrite(s.handleCreatePushJob)))
+		mux.Handle("POST /api/v1/push/jobs/{id}/preview", s.auth(s.handlePreviewPush))
+		mux.Handle("POST /api/v1/push/jobs/{id}/run", s.auth(s.requireWrite(s.handleRunPush)))
+	}
+
+	// Phase 7 — pollers + in-app CLI.
+	if d.Pollers != nil {
+		mux.Handle("GET /api/v1/pollers", s.auth(s.handleListPollers))
+		mux.Handle("POST /api/v1/pollers", s.auth(s.requireWrite(s.handleRegisterPoller)))
+		mux.Handle("DELETE /api/v1/pollers/{id}", s.auth(s.requireWrite(s.handleDeletePoller)))
+	}
+	if d.Terminal != nil {
+		// WS upgrade: GET /api/v1/devices/{id}/terminal
+		mux.Handle("GET /api/v1/devices/{id}/terminal", s.authH(s.handleTerminal()))
+	}
+
+	// Phase 8 — probes & runtime compliance.
+	if d.Probes != nil {
+		mux.Handle("GET /api/v1/probes", s.auth(s.handleListProbes))
+		mux.Handle("POST /api/v1/probes", s.auth(s.requireWrite(s.handleCreateProbe)))
+		mux.Handle("DELETE /api/v1/probes/{id}", s.auth(s.requireWrite(s.handleDeleteProbe)))
+		mux.Handle("GET /api/v1/probes/{id}/runs", s.auth(s.handleListProbeRuns))
+	}
+
+	// Phase 9 — tenants & quotas.
+	if d.Tenants != nil {
+		mux.Handle("GET /api/v1/tenants", s.auth(s.requireAdmin(s.handleListTenants)))
+		mux.Handle("POST /api/v1/tenants", s.auth(s.requireAdmin(s.handleCreateTenant)))
+		mux.Handle("PUT /api/v1/tenants/{id}/quota", s.auth(s.requireAdmin(s.handleSetTenantQuota)))
+	}
+
+	// Phase 10 — topology & GitOps mirror.
+	mux.Handle("GET /api/v1/topology", s.auth(s.handleTopology))
+	if d.GitOps != nil {
+		mux.Handle("GET /api/v1/gitops/mirror", s.auth(s.handleGetMirror))
+		mux.Handle("PUT /api/v1/gitops/mirror", s.auth(s.requireAdmin(s.handlePutMirror)))
+	}
 
 	// Embedded UI (single-page).
 	mux.Handle("GET /", web.Handler())
@@ -138,6 +242,11 @@ func userFromContext(ctx context.Context) *auth.User {
 }
 
 func (s *server) auth(h http.HandlerFunc) http.Handler {
+	return s.authH(http.HandlerFunc(h))
+}
+
+// authH wraps any http.Handler with session authentication.
+func (s *server) authH(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie(s.Auth.CookieName())
 		if err != nil {
@@ -150,7 +259,7 @@ func (s *server) auth(h http.HandlerFunc) http.Handler {
 			return
 		}
 		ctx := context.WithValue(r.Context(), userKey, u)
-		h(w, r.WithContext(ctx))
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
@@ -159,6 +268,17 @@ func (s *server) requireWrite(h http.HandlerFunc) http.HandlerFunc {
 		u := userFromContext(r.Context())
 		if u == nil || !u.Role.CanWrite() {
 			writeError(w, http.StatusForbidden, "insufficient role")
+			return
+		}
+		h(w, r)
+	}
+}
+
+func (s *server) requireAdmin(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		u := userFromContext(r.Context())
+		if u == nil || u.Role != auth.RoleAdmin {
+			writeError(w, http.StatusForbidden, "admin role required")
 			return
 		}
 		h(w, r)

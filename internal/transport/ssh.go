@@ -121,6 +121,91 @@ func DialSSH(ctx context.Context, cfg SSHConfig) (drivers.Session, func() error,
 	return s, closer, nil
 }
 
+// shellChannel is an io.ReadWriteCloser bridging an SSH shell's stdin and
+// stdout. It is used by the in-app web terminal (Phase 7).
+type shellChannel struct {
+	client  *ssh.Client
+	session *ssh.Session
+	stdin   io.WriteCloser
+	stdout  io.Reader
+}
+
+func (c *shellChannel) Read(p []byte) (int, error)  { return c.stdout.Read(p) }
+func (c *shellChannel) Write(p []byte) (int, error) { return c.stdin.Write(p) }
+func (c *shellChannel) Close() error {
+	_ = c.session.Close()
+	return c.client.Close()
+}
+
+// DialSSHShell opens an interactive shell suitable for raw byte-level
+// proxying (the in-app CLI uses this). Unlike DialSSH, it requests a real
+// PTY and does no prompt detection — input/output are forwarded verbatim.
+func DialSSHShell(ctx context.Context, cfg SSHConfig) (io.ReadWriteCloser, error) {
+	if cfg.Username == "" {
+		return nil, errors.New("transport/ssh: empty username")
+	}
+	if cfg.Timeout == 0 {
+		cfg.Timeout = 30 * time.Second
+	}
+	addr := cfg.Address
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		port := cfg.Port
+		if port == 0 {
+			port = 22
+		}
+		addr = net.JoinHostPort(addr, strconv.Itoa(port))
+	}
+	hk := cfg.HostKeyCallback
+	if hk == nil {
+		hk = tofuHostKey()
+	}
+	clientCfg := &ssh.ClientConfig{
+		User:            cfg.Username,
+		Auth:            []ssh.AuthMethod{ssh.Password(cfg.Password)},
+		HostKeyCallback: hk,
+		Timeout:         cfg.Timeout,
+	}
+	d := net.Dialer{Timeout: cfg.Timeout}
+	netConn, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("transport/ssh: dial: %w", err)
+	}
+	conn, chans, reqs, err := ssh.NewClientConn(netConn, addr, clientCfg)
+	if err != nil {
+		_ = netConn.Close()
+		return nil, fmt.Errorf("transport/ssh: handshake: %w", err)
+	}
+	client := ssh.NewClient(conn, chans, reqs)
+	sess, err := client.NewSession()
+	if err != nil {
+		_ = client.Close()
+		return nil, fmt.Errorf("transport/ssh: session: %w", err)
+	}
+	stdin, err := sess.StdinPipe()
+	if err != nil {
+		_ = sess.Close()
+		_ = client.Close()
+		return nil, err
+	}
+	stdout, err := sess.StdoutPipe()
+	if err != nil {
+		_ = sess.Close()
+		_ = client.Close()
+		return nil, err
+	}
+	if err := sess.RequestPty("xterm", 40, 120, ssh.TerminalModes{}); err != nil {
+		_ = sess.Close()
+		_ = client.Close()
+		return nil, fmt.Errorf("transport/ssh: pty: %w", err)
+	}
+	if err := sess.Shell(); err != nil {
+		_ = sess.Close()
+		_ = client.Close()
+		return nil, fmt.Errorf("transport/ssh: shell: %w", err)
+	}
+	return &shellChannel{client: client, session: sess, stdin: stdin, stdout: stdout}, nil
+}
+
 // sshSession implements drivers.Session over an interactive SSH shell.
 type sshSession struct {
 	client  *ssh.Client

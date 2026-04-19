@@ -172,8 +172,8 @@ func incIP(ip net.IP) {
 
 // NetBoxDevice is the subset of fields we read.
 type NetBoxDevice struct {
-	Name        string `json:"name"`
-	PrimaryIP   struct {
+	Name      string `json:"name"`
+	PrimaryIP struct {
 		Address string `json:"address"`
 	} `json:"primary_ip"`
 	DeviceType struct {

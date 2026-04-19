@@ -13,11 +13,11 @@ import (
 
 // Probe is the user-defined definition.
 type Probe struct {
-	ID         int64  `json:"id"`
-	TenantID   int64  `json:"tenant_id"`
-	Name       string `json:"name"`
-	Command    string `json:"command"`
-	IntervalS  int    `json:"interval_s"`
+	ID        int64  `json:"id"`
+	TenantID  int64  `json:"tenant_id"`
+	Name      string `json:"name"`
+	Command   string `json:"command"`
+	IntervalS int    `json:"interval_s"`
 }
 
 // Run is one execution of a probe against one device.

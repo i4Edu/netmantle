@@ -7,12 +7,28 @@ NetMantle backs up, version-controls, audits, and automates network device
 configurations. It is API-first, GitOps-friendly, and built to be deployed on
 your own infrastructure.
 
-This repository contains the **Phase 0 + Phase 1 MVP**: project foundation,
-device inventory, encrypted credentials, SSH-based config backup with a Cisco
-IOS driver, git-backed config versioning, REST API + OpenAPI, and a minimal
-embedded web UI. Subsequent phases (change notifications, compliance,
-discovery, push automation, distributed pollers, multi-tenancy/HA) are tracked
-in [docs/roadmap.md](docs/roadmap.md).
+This repository contains a single-PR landing of **Phases 0 through 10** of
+the NetMantle plan. Each phase ships in MVP form — production-grade
+hardening (NETCONF/RESTCONF/gNMI wire formats beyond stubs, a topology UI,
+a driver-SDK registry, additional vendor drivers, full HA testing) is
+explicitly follow-up work. See [docs/roadmap.md](docs/roadmap.md) for
+what shipped vs. what is still scaffolded.
+
+What's in the box:
+
+| Phase | Capability |
+|-------|------------|
+| 0 | Foundation: Go module, CI, config, logging, SQLite + migrations, envelope-encrypted secrets, local auth + RBAC, Prometheus metrics, Docker image, Helm chart |
+| 1 | Inventory CRUD, SSH transport, Cisco IOS / Arista EOS / Junos / MikroTik / generic-SSH drivers, git-backed config store, BackupNow + run history, embedded web UI, OpenAPI + Swagger UI |
+| 2 | Diff engine with platform-aware ignore rules, ChangeEvent recording, notification channels (webhook / Slack / SMTP) and rules |
+| 3 | SQLite-FTS5 search across all stored configs, saved searches, CSV export of changes |
+| 4 | Compliance rule engine (regex / must-include / must-exclude / ordered-block), findings, transition-only notifications |
+| 5 | TCP/banner port-scan discovery → driver fingerprinting; NetBox JSON importer |
+| 6 | Push-job CRUD, `text/template` rendering, preview, smart result grouping |
+| 7 | RFC-6455 WebSocket in-app web terminal with full audit transcript; poller registration with bcrypt-hashed bootstrap tokens |
+| 8 | Probes framework + reuse of the rule engine for runtime compliance, with a leader-elected retention pruner |
+| 9 | Tenant CRUD + per-tenant device quotas, DB-row leader-elected scheduler, Helm chart |
+| 10 | NETCONF helpers + RESTCONF/gNMI stub drivers, LLDP/CDP topology graph, GitOps mirror to external git, `release.yml` workflow with cosign signing + syft SBOM |
 
 ## Status
 

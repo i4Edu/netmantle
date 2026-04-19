@@ -224,3 +224,91 @@ components:
         status: {type: string, enum: [running, success, failed]}
         error: {type: string, nullable: true}
         commit_sha: {type: string, nullable: true}
+
+# -------------------------------------------------------------------------
+# Phase 2..10 endpoints. Path-only sketch — full schemas live in code.
+# Auto-generation of this section from the handlers is a follow-up.
+# -------------------------------------------------------------------------
+  /api/v1/changes:
+    get: { summary: List ChangeEvents, security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
+  /api/v1/changes/{id}/diff:
+    get:
+      summary: Get unified diff for a ChangeEvent
+      security: [{cookieAuth: []}]
+      parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+      responses: {'200': {description: text/plain diff}}
+  /api/v1/notifications/channels:
+    get: { summary: List notification channels, security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
+    post: { summary: Create notification channel, security: [{cookieAuth: []}], responses: {'201': {description: Created}} }
+  /api/v1/notifications/rules:
+    get: { summary: List notification rules, security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
+    post: { summary: Create notification rule, security: [{cookieAuth: []}], responses: {'201': {description: Created}} }
+  /api/v1/search:
+    get:
+      summary: Full-text search across stored configs
+      security: [{cookieAuth: []}]
+      parameters:
+        - {name: q, in: query, required: true, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer}}
+      responses: {'200': {description: OK}}
+  /api/v1/search/saved:
+    get: { summary: List saved searches, security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
+    post: { summary: Save a search, security: [{cookieAuth: []}], responses: {'201': {description: Created}} }
+  /api/v1/changes.csv:
+    get: { summary: Export changes as CSV, security: [{cookieAuth: []}], responses: {'200': {description: text/csv}} }
+  /api/v1/compliance/rules:
+    get: { summary: List compliance rules, security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
+    post: { summary: Create a compliance rule, security: [{cookieAuth: []}], responses: {'201': {description: Created}} }
+  /api/v1/compliance/findings:
+    get: { summary: List current compliance findings, security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
+  /api/v1/discovery/scans:
+    post: { summary: Start a discovery scan, security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
+  /api/v1/discovery/import/netbox:
+    post: { summary: Import devices from a NetBox JSON dump, security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
+  /api/v1/push/jobs:
+    get: { summary: List push jobs, security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
+    post: { summary: Create a push job, security: [{cookieAuth: []}], responses: {'201': {description: Created}} }
+  /api/v1/push/jobs/{id}/preview:
+    post:
+      summary: Preview rendered config per device
+      security: [{cookieAuth: []}]
+      parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+      responses: {'200': {description: OK}}
+  /api/v1/push/jobs/{id}/run:
+    post:
+      summary: Execute a push job (preview-only in this MVP — see roadmap)
+      security: [{cookieAuth: []}]
+      parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+      responses: {'200': {description: OK}}
+  /api/v1/pollers:
+    get: { summary: List remote pollers, security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
+    post: { summary: Register a remote poller, security: [{cookieAuth: []}], responses: {'201': {description: Created}} }
+  /api/v1/devices/{id}/terminal:
+    get:
+      summary: WebSocket upgrade to an in-app device terminal
+      security: [{cookieAuth: []}]
+      parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+      responses: {'101': {description: Switching Protocols}}
+  /api/v1/probes:
+    get: { summary: List probes, security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
+    post: { summary: Create a probe, security: [{cookieAuth: []}], responses: {'201': {description: Created}} }
+  /api/v1/probes/{id}/runs:
+    get:
+      summary: List recent probe runs
+      security: [{cookieAuth: []}]
+      parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+      responses: {'200': {description: OK}}
+  /api/v1/tenants:
+    get: { summary: List tenants (admin), security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
+    post: { summary: Create tenant (admin), security: [{cookieAuth: []}], responses: {'201': {description: Created}} }
+  /api/v1/tenants/{id}/quota:
+    put:
+      summary: Set per-tenant device quota (admin)
+      security: [{cookieAuth: []}]
+      parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
+      responses: {'204': {description: No Content}}
+  /api/v1/topology:
+    get: { summary: LLDP/CDP topology graph, security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
+  /api/v1/gitops/mirror:
+    get: { summary: Get GitOps mirror config, security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
+    put: { summary: Configure GitOps mirror (admin), security: [{cookieAuth: []}], responses: {'204': {description: No Content}} }

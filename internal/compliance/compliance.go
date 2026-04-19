@@ -6,7 +6,7 @@
 //   - must_include   : config must contain the literal Pattern
 //   - must_exclude   : config must NOT contain the literal Pattern
 //   - ordered_block  : Pattern is a JSON array of literal lines that must
-//                      appear in order somewhere in the config
+//     appear in order somewhere in the config
 package compliance
 
 import (
