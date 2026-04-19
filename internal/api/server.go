@@ -241,7 +241,7 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: s.Auth.CookieName(), Value: "", Path: "/", MaxAge: -1,
-		HttpOnly: true, SameSite: http.SameSiteLaxMode,
+		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: r.TLS != nil,
 	})
 	w.WriteHeader(http.StatusNoContent)
 }

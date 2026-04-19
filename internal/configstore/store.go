@@ -14,9 +14,11 @@ package configstore
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,6 +43,18 @@ func New(root string) (*Store, error) {
 		return nil, fmt.Errorf("configstore: mkdir root: %w", err)
 	}
 	return &Store{Root: root}, nil
+}
+
+// RepoPath returns the on-disk path of a device's git repository. The
+// directory may not exist yet (no Commit has been made).
+func (s *Store) RepoPath(tenantID, deviceID int64) (string, error) {
+	if s == nil || s.Root == "" {
+		return "", errors.New("configstore: not initialised")
+	}
+	return filepath.Join(s.Root,
+		strconv.FormatInt(tenantID, 10),
+		strconv.FormatInt(deviceID, 10),
+	), nil
 }
 
 // Artifact is the input to Commit.
@@ -196,7 +210,7 @@ func readAll(r interface{ Read([]byte) (int, error) }, buf []byte) (int, error) 
 		n, err := r.Read(buf[off:])
 		off += n
 		if err != nil {
-			if err.Error() == "EOF" {
+			if errors.Is(err, io.EOF) {
 				return off, nil
 			}
 			return off, err
@@ -208,14 +222,10 @@ func readAll(r interface{ Read([]byte) (int, error) }, buf []byte) (int, error) 
 // silence "imported and not used" possibilities while keeping the dep.
 var _ = plumbing.ZeroHash
 
-// hasParent reports whether p contains a ".." component.
+// hasParent reports whether p contains a ".." path component.
 func hasParent(p string) bool {
-	for _, seg := range filepath.SplitList(p) {
-		_ = seg
-	}
-	// filepath.SplitList is for PATH-style separators; do a simple scan.
-	for i := 0; i+1 < len(p); i++ {
-		if p[i] == '.' && p[i+1] == '.' {
+	for _, seg := range strings.Split(p, string(os.PathSeparator)) {
+		if seg == ".." {
 			return true
 		}
 	}

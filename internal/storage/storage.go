@@ -138,14 +138,58 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-// splitStatements splits a SQL script on top-level semicolons. It does not
-// support strings/comments containing ';' — fine for our hand-written
-// migration files.
+// splitStatements splits a SQL script on top-level semicolons, ignoring
+// any `;` that appears inside line comments (`-- ...`) or string literals
+// (`'...'`). Sufficient for the SQLite migrations we hand-write.
 func splitStatements(script string) []string {
-	parts := strings.Split(script, ";")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		out = append(out, p)
+	var (
+		out      []string
+		buf      strings.Builder
+		inString bool
+		inLine   bool
+	)
+	for i := 0; i < len(script); i++ {
+		c := script[i]
+		if inLine {
+			if c == '\n' {
+				inLine = false
+			}
+			buf.WriteByte(c)
+			continue
+		}
+		if inString {
+			if c == '\'' {
+				// Handle escaped '' inside string literal.
+				if i+1 < len(script) && script[i+1] == '\'' {
+					buf.WriteByte(c)
+					buf.WriteByte(script[i+1])
+					i++
+					continue
+				}
+				inString = false
+			}
+			buf.WriteByte(c)
+			continue
+		}
+		if c == '-' && i+1 < len(script) && script[i+1] == '-' {
+			inLine = true
+			buf.WriteByte(c)
+			continue
+		}
+		if c == '\'' {
+			inString = true
+			buf.WriteByte(c)
+			continue
+		}
+		if c == ';' {
+			out = append(out, buf.String())
+			buf.Reset()
+			continue
+		}
+		buf.WriteByte(c)
+	}
+	if strings.TrimSpace(buf.String()) != "" {
+		out = append(out, buf.String())
 	}
 	return out
 }
