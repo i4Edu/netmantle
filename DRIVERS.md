@@ -21,14 +21,8 @@ coverage vs scaffolded transports.
 - `huawei_vrp` — Huawei VRP; suppresses pager with `screen-length 0 temporary`, dumps via `display current-configuration`
 - `cisco_netconf` — Cisco IOS-XE/NX-OS via NETCONF-over-SSH (RFC 6241/6242); retrieves running datastore as `netconf-config` artifact. Requires `backup.Service.NetconfSession` factory.
 - `junos_netconf` — Juniper Junos via NETCONF-over-SSH; retrieves both running and candidate datastores. Requires `backup.Service.NetconfSession` factory.
-
-## Scaffolded (registered, backup path not hardened yet)
-
-- `restconf` — REST-based config access; stub returns "scaffolded" error
-- `gnmi` — gRPC-based model-driven telemetry; stub returns "scaffolded" error
-
-These stubs are intentionally present for inventory and roadmap visibility.
-RESTCONF and gNMI wiring are planned for a follow-up hardening PR.
+- `restconf` — Native RESTCONF over HTTPS with basic/bearer authentication; retrieves datastore payload as `restconf-config`.
+- `gnmi` — Native gNMI over gRPC/TLS with basic/bearer metadata auth; retrieves JSON IETF config payload as `gnmi-config`.
 
 ## Driver development references
 

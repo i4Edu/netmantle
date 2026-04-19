@@ -26,6 +26,7 @@ type Config struct {
 	Security SecurityConfig `yaml:"security"`
 	Logging  LoggingConfig  `yaml:"logging"`
 	Backup   BackupConfig   `yaml:"backup"`
+	Poller   PollerConfig   `yaml:"poller"`
 }
 
 type ServerConfig struct {
@@ -60,6 +61,17 @@ type BackupConfig struct {
 	Workers int           `yaml:"workers"`
 }
 
+type PollerConfig struct {
+	GRPC PollerGRPCConfig `yaml:"grpc"`
+}
+
+type PollerGRPCConfig struct {
+	Address         string `yaml:"address"`
+	TLSCertFile     string `yaml:"tls_cert_file"`
+	TLSKeyFile      string `yaml:"tls_key_file"`
+	TLSClientCAFile string `yaml:"tls_client_ca_file"`
+}
+
 // Default returns a Config populated with sensible defaults.
 func Default() Config {
 	return Config{
@@ -86,6 +98,11 @@ func Default() Config {
 		Backup: BackupConfig{
 			Timeout: 60 * time.Second,
 			Workers: 4,
+		},
+		Poller: PollerConfig{
+			GRPC: PollerGRPCConfig{
+				Address: "",
+			},
 		},
 	}
 }
@@ -131,6 +148,18 @@ func (c Config) Validate() error {
 	if c.Backup.Workers < 1 {
 		return errors.New("backup.workers must be >= 1")
 	}
+	grpcCfg := c.Poller.GRPC
+	if grpcCfg.Address != "" {
+		if strings.TrimSpace(grpcCfg.TLSCertFile) == "" {
+			return errors.New("poller.grpc.tls_cert_file must be set when poller.grpc.address is enabled")
+		}
+		if strings.TrimSpace(grpcCfg.TLSKeyFile) == "" {
+			return errors.New("poller.grpc.tls_key_file must be set when poller.grpc.address is enabled")
+		}
+		if strings.TrimSpace(grpcCfg.TLSClientCAFile) == "" {
+			return errors.New("poller.grpc.tls_client_ca_file must be set when poller.grpc.address is enabled")
+		}
+	}
 	return nil
 }
 
@@ -168,5 +197,17 @@ func applyEnv(c *Config) {
 		if d, err := time.ParseDuration(v); err == nil {
 			c.Backup.Timeout = d
 		}
+	}
+	if v := os.Getenv("NETMANTLE_POLLER_GRPC_ADDRESS"); v != "" {
+		c.Poller.GRPC.Address = v
+	}
+	if v := os.Getenv("NETMANTLE_POLLER_GRPC_TLS_CERT_FILE"); v != "" {
+		c.Poller.GRPC.TLSCertFile = v
+	}
+	if v := os.Getenv("NETMANTLE_POLLER_GRPC_TLS_KEY_FILE"); v != "" {
+		c.Poller.GRPC.TLSKeyFile = v
+	}
+	if v := os.Getenv("NETMANTLE_POLLER_GRPC_TLS_CLIENT_CA_FILE"); v != "" {
+		c.Poller.GRPC.TLSClientCAFile = v
 	}
 }

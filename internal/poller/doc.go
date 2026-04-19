@@ -3,8 +3,8 @@
 //
 // The gRPC wire protocol is defined in proto/poller.proto. WireService in this
 // package provides a transport-agnostic core adapter for the authenticate /
-// claim / report flow so the eventual gRPC+mTLS endpoint can delegate directly
-// to persisted queue logic.
+// claim / report flow so the gRPC+mTLS listener shell can delegate directly
+// to persisted queue logic once RPC handlers are registered.
 package poller
 
 // (existing code continues in poller.go)

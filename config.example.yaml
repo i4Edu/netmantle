@@ -39,3 +39,12 @@ backup:
   timeout: "60s"
   # Maximum concurrent backup workers.
   workers: 4
+
+poller:
+  grpc:
+    # Optional distributed-poller gRPC listener (leave empty to disable).
+    address: ""
+    # mTLS files required when address is set.
+    tls_cert_file: ""
+    tls_key_file: ""
+    tls_client_ca_file: ""
