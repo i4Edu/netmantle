@@ -16,7 +16,7 @@ scope for follow-up hardening.
 | 7 | In-app CLI & distributed pollers | Web terminal transcript/audit, poller registration + heartbeat | Full gRPC poller wire protocol and remote execution hardening |
 | 8 | Runtime state auditing & compliance | Probe framework and runtime checks | Broader probe library and policy packs |
 | 9 | Multi-tenancy & HA | Tenant CRUD, quotas, leader-elected scheduler, Helm chart | Automated HA/failover validation and scale testing |
-| 10 | Hardening + modern transports + topology + GitOps mirror | NETCONF helpers, RESTCONF/gNMI stubs, LLDP/CDP topology API builder, GitOps mirror, signed release + SBOM workflow | Full NETCONF/RESTCONF/gNMI backup wiring, topology visualization UI, transport-level hardening |
+| 10 | Hardening + modern transports + topology + GitOps mirror | NETCONF helpers, RESTCONF/gNMI stubs, LLDP/CDP topology API + UI list view, GitOps mirror, signed release + SBOM workflow | Full NETCONF/RESTCONF/gNMI backup wiring, topology graph-canvas renderer, transport-level hardening |
 
 ## Immediate next actions
 
