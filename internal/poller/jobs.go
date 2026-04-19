@@ -109,9 +109,9 @@ func (s *JobService) Claim(ctx context.Context, tenantID, pollerID int64, suppor
 	// SELECT the best candidate first (LIMIT 1), fetching the timestamps
 	// needed to recalculate expires_at in Go (avoids complex SQL arithmetic).
 	var (
-		jobID           int64
-		createdAtStr    string
-		expiresAtStr    sql.NullString
+		jobID        int64
+		createdAtStr string
+		expiresAtStr sql.NullString
 	)
 	q := `SELECT id, created_at, expires_at FROM poller_jobs
           WHERE tenant_id=? AND status='queued'
