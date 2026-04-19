@@ -117,6 +117,9 @@ func NewServer(d Deps) http.Handler {
 	// are tenant-scoped.
 	mux.Handle("GET /api/v1/audit", s.auth(s.handleListAudit))
 
+	// Dashboard summary aggregation (read-only, tenant-scoped).
+	mux.Handle("GET /api/v1/dashboard/summary", s.auth(s.handleDashboardSummary))
+
 	// Phase 2 — changes & notifications.
 	if d.Changes != nil {
 		mux.Handle("GET /api/v1/changes", s.auth(s.handleListChanges))

@@ -1,6 +1,8 @@
 package api
 
 import (
+	"encoding/csv"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -21,6 +23,10 @@ import (
 //	offset=<int>          pagination offset (default 0)
 func (s *server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 	if s.Audit == nil {
+		if r.URL.Query().Get("format") == "csv" {
+			writeAuditCSV(w, nil)
+			return
+		}
 		writeJSON(w, http.StatusOK, []audit.Entry{})
 		return
 	}
@@ -86,7 +92,48 @@ func (s *server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 	if out == nil {
 		out = []audit.Entry{}
 	}
+	if q.Get("format") == "csv" {
+		writeAuditCSV(w, out)
+		return
+	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// writeAuditCSV streams the same audit rows the JSON endpoint would return,
+// in a spreadsheet-friendly form. The column set matches the Audit page so
+// "what you see is what you export". Times are emitted as RFC3339Nano so the
+// CSV round-trips losslessly back into filters.
+func writeAuditCSV(w http.ResponseWriter, rows []audit.Entry) {
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition",
+		fmt.Sprintf(`attachment; filename="netmantle-audit-%s.csv"`,
+			time.Now().UTC().Format("20060102-150405")))
+	cw := csv.NewWriter(w)
+	defer cw.Flush()
+	_ = cw.Write([]string{
+		"id", "created_at", "tenant_id", "actor_user_id",
+		"source", "action", "target", "request_id", "detail",
+	})
+	for _, e := range rows {
+		_ = cw.Write([]string{
+			strconv.FormatInt(e.ID, 10),
+			e.CreatedAt.UTC().Format(time.RFC3339Nano),
+			int64Ptr(e.TenantID),
+			int64Ptr(e.ActorUserID),
+			e.Source,
+			e.Action,
+			e.Target,
+			e.RequestID,
+			e.Detail,
+		})
+	}
+}
+
+func int64Ptr(p *int64) string {
+	if p == nil {
+		return ""
+	}
+	return strconv.FormatInt(*p, 10)
 }
 
 // parseRFC3339Loose accepts both RFC3339 and RFC3339Nano. The Audit page

@@ -43,6 +43,14 @@
 <div class="shell" id="app-view" hidden>
   <aside class="sidebar" id="sidebar">
     <nav>
+      <a href="#/dashboard" data-route="dashboard" title="Dashboard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/>
+          <rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/>
+        </svg>
+        <span class="label">Dashboard</span>
+      </a>
       <a href="#/inventory" data-route="inventory" title="Inventory">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -83,6 +91,7 @@
           <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/>
         </svg>
         <span class="label">Approvals</span>
+        <span class="nav-badge" id="approvals-badge" hidden>0</span>
       </a>
       <a href="#/audit" data-route="audit" title="Audit">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"

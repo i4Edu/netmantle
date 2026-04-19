@@ -313,3 +313,281 @@ pre.config {
   .sidebar .label { display: none; }
   .inventory { grid-template-columns: 1fr; }
 }
+
+/* ---------- sidebar pending-count badge (e.g. Approvals) ---------- */
+.nav-badge {
+  margin-left: auto;
+  background: var(--status-warn);
+  color: var(--text-on-accent);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  padding: 0 6px;
+  min-width: 18px;
+  text-align: center;
+  border-radius: 999px;
+  line-height: 18px;
+}
+
+/* ---------- dashboard ---------- */
+.dash-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+.dash-stat {
+  background: var(--surface-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  box-shadow: var(--shadow-sm);
+}
+.dash-stat .label {
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.dash-stat .value {
+  font-size: 1.75rem;
+  font-weight: 600;
+  color: var(--text-strong);
+  line-height: 1.1;
+}
+.dash-stat .sub {
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+}
+.dash-stat svg.spark {
+  width: 100%;
+  height: 32px;
+  display: block;
+}
+.dash-stat svg.spark polyline { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+.dash-stat svg.spark polygon  { fill: var(--accent-soft); stroke: none; }
+
+.dash-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+}
+@media (max-width: 960px) { .dash-cols { grid-template-columns: 1fr; } }
+
+.driver-bar {
+  display: grid;
+  grid-template-columns: 1fr 60px 40px;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  font-size: var(--font-size-sm);
+}
+.driver-bar .track {
+  height: 8px;
+  background: var(--surface-sunken);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.driver-bar .fill {
+  height: 100%;
+  background: var(--status-ok);
+  border-radius: 999px;
+}
+.driver-bar .fill.warn { background: var(--status-warn); }
+.driver-bar .fill.bad  { background: var(--status-bad); }
+.driver-bar .pct { text-align: right; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+.timeline { list-style: none; padding: 0; margin: 0; }
+.timeline li {
+  display: grid;
+  grid-template-columns: 60px 100px 1fr;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border-default);
+  font-size: var(--font-size-sm);
+}
+.timeline li:last-child { border-bottom: 0; }
+.timeline .when { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.timeline .what { color: var(--text-strong); }
+
+.hotspot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border-default);
+  font-size: var(--font-size-sm);
+}
+.hotspot:last-child { border-bottom: 0; }
+.hotspot .detail { color: var(--text-muted); font-size: var(--font-size-xs); }
+
+.health dl {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  font-size: var(--font-size-sm);
+}
+.health dt { color: var(--text-muted); }
+.health dd { margin: 0; color: var(--text-strong); }
+
+/* ---------- two-pane Git-style diff viewer ---------- */
+.diff-toolbar {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+  margin-bottom: var(--space-2);
+}
+.diff-toolbar .legend { display: inline-flex; gap: var(--space-1); align-items: center; }
+.diff-toolbar .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.diff-toolbar .swatch.add { background: var(--status-ok-soft); border: 1px solid var(--status-ok); }
+.diff-toolbar .swatch.del { background: var(--status-bad-soft); border: 1px solid var(--status-bad); }
+
+.diff-twopane {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface-card);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  max-height: 70vh;
+  overflow-y: auto;
+}
+.diff-twopane > div { min-width: 0; }
+.diff-twopane .pane-head {
+  position: sticky; top: 0;
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  padding: var(--space-1) var(--space-3);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  border-bottom: 1px solid var(--border-default);
+}
+.diff-twopane .right { border-left: 1px solid var(--border-default); }
+.diff-row {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: 0;
+  white-space: pre;
+}
+.diff-row .ln {
+  text-align: right;
+  padding: 0 var(--space-2);
+  color: var(--text-muted);
+  user-select: none;
+  background: var(--surface-sunken);
+  border-right: 1px solid var(--border-default);
+  font-variant-numeric: tabular-nums;
+}
+.diff-row .src {
+  padding: 0 var(--space-2);
+  overflow-x: auto;
+}
+.diff-row.add .src { background: var(--status-ok-soft); }
+.diff-row.del .src { background: var(--status-bad-soft); }
+.diff-row.hunk .src,
+.diff-row.hunk .ln {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-style: italic;
+}
+
+/* ---------- topology canvas ---------- */
+.topo-wrap {
+  position: relative;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+  overflow: hidden;
+}
+.topo-wrap svg { width: 100%; height: 540px; display: block; cursor: grab; }
+.topo-wrap svg:active { cursor: grabbing; }
+.topo-wrap .legend {
+  position: absolute;
+  top: var(--space-2); left: var(--space-2);
+  background: var(--surface-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--font-size-xs);
+  color: var(--text-muted);
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+}
+.topo-wrap .legend .dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+.topo-wrap .side-panel {
+  position: absolute;
+  top: 0; right: 0; bottom: 0;
+  width: 280px;
+  background: var(--surface-card);
+  border-left: 1px solid var(--border-default);
+  padding: var(--space-3);
+  overflow-y: auto;
+  font-size: var(--font-size-sm);
+}
+.topo-node circle { stroke: var(--text-strong); stroke-width: 1.5; cursor: pointer; }
+.topo-node circle.ok   { fill: var(--status-ok); }
+.topo-node circle.warn { fill: var(--status-warn); }
+.topo-node circle.bad  { fill: var(--status-bad); }
+.topo-node circle.unknown { fill: var(--text-muted); }
+.topo-node text {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  fill: var(--text-default);
+  pointer-events: none;
+  text-anchor: middle;
+}
+.topo-edge { stroke: var(--text-muted); stroke-width: 1; opacity: 0.7; }
+
+/* ---------- inventory device-card grid (used by Inventory v2) ---------- */
+.inv-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  margin-bottom: var(--space-3);
+}
+.inv-toolbar input[type='search'] {
+  flex: 1;
+  min-width: 240px;
+  max-width: 420px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-card);
+  color: var(--text-default);
+  font: inherit;
+}
+.inv-toolbar select {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-card);
+  color: var(--text-default);
+  font: inherit;
+}
+.device-card .compl-track {
+  height: 6px;
+  background: var(--surface-sunken);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.device-card .compl-track .fill {
+  height: 100%;
+  background: var(--status-ok);
+}
+.device-card .compl-track .fill.warn { background: var(--status-warn); }
+.device-card .compl-track .fill.bad  { background: var(--status-bad); }

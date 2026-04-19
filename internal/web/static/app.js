@@ -93,8 +93,9 @@ async function refreshSession() {
     $('#login-view').hidden = true;
     $('#app-view').hidden = false;
     $('#who').textContent = `${me.username} (${me.role})`;
-    if (!location.hash) location.hash = '#/inventory';
+    if (!location.hash) location.hash = '#/dashboard';
     else router();
+    refreshApprovalsBadge();
   } catch (_) {
     me = null;
     $('#nav').hidden = true;
@@ -104,12 +105,12 @@ async function refreshSession() {
 }
 
 // ---------- router ----------
-const ROUTES = ['inventory', 'backups', 'compliance', 'topology', 'approvals', 'audit', 'settings'];
+const ROUTES = ['dashboard', 'inventory', 'backups', 'compliance', 'topology', 'approvals', 'audit', 'settings'];
 
 function currentRoute() {
   const h = (location.hash || '').replace(/^#\/?/, '');
-  const r = h.split('/')[0] || 'inventory';
-  return ROUTES.includes(r) ? r : 'inventory';
+  const r = h.split('/')[0] || 'dashboard';
+  return ROUTES.includes(r) ? r : 'dashboard';
 }
 
 function router() {
@@ -135,6 +136,7 @@ let currentDeviceId = null;
 
 views.inventory = (root) => {
   root.appendChild(el('h2', {}, 'Inventory'));
+  root.appendChild(el('div', { class: 'card-grid', id: 'device-cards' }));
   const wrap = el('div', { class: 'inventory' });
   const aside = el('aside', { class: 'list-pane' },
     el('h2', {}, 'Devices'),
@@ -230,6 +232,7 @@ async function loadDevices() {
   ul.innerHTML = '';
   if (!list.length) {
     ul.appendChild(el('li', { class: 'muted' }, 'No devices yet — add one below.'));
+    renderDeviceCards(list);
     return;
   }
   for (const d of list) {
@@ -238,6 +241,82 @@ async function loadDevices() {
     li.onclick = () => showDevice(d.id);
     ul.appendChild(li);
   }
+  renderDeviceCards(list);
+}
+
+// renderDeviceCards renders the device-card grid above the split-pane list.
+//
+// Each card surfaces hostname, driver, last backup time, compliance score,
+// and quick read-only actions (Open, Diff). Mutating actions (e.g. backup)
+// remain on the device-detail pane to keep the proposal/audit invariants.
+async function renderDeviceCards(devices) {
+  const host = $('#device-cards');
+  if (!host) return;
+  host.innerHTML = '';
+  if (!devices.length) {
+    host.appendChild(el('p', { class: 'muted' }, 'No devices yet.'));
+    return;
+  }
+  // Pull compliance findings + latest backup time for score/last-seen overlay.
+  let findings = [];
+  try { findings = await api('GET', '/compliance/findings'); } catch (_) {}
+  const ruleCount = await safeCount('/compliance/rules');
+  const failByDev = {}, passByDev = {};
+  for (const f of findings) {
+    if (f.status === 'pass') passByDev[f.device_id] = (passByDev[f.device_id] || 0) + 1;
+    if (f.status === 'fail') failByDev[f.device_id] = (failByDev[f.device_id] || 0) + 1;
+  }
+  for (const d of devices) {
+    const fails = failByDev[d.id] || 0;
+    const passes = passByDev[d.id] || 0;
+    const evaluated = fails + passes;
+    const score = evaluated > 0 ? Math.round((passes * 100) / evaluated) : null;
+    const cls = fails === 0 ? 'ok' : (fails >= 3 ? 'bad' : 'warn');
+    const status = fails === 0 ? (evaluated === 0 ? 'no rules' : 'compliant')
+                                : (fails >= 3 ? 'violation' : 'drift');
+
+    // Last backup: pull from runs in a separate request per card. Cheap at
+    // small scale, batchable later via a new endpoint if needed.
+    let lastBackup = '—';
+    try {
+      const runs = await api('GET', `/devices/${d.id}/runs`);
+      const ok = (runs || []).find((r) => r.status === 'success');
+      if (ok) lastBackup = relativeTime(new Date(ok.started_at));
+    } catch (_) { /* ignore */ }
+
+    const card = el('div', { class: 'card device-card', 'data-id': d.id },
+      el('div', { class: 'row' },
+        el('span', { class: 'hostname' }, d.hostname),
+        el('span', { style: 'flex:1' }),
+        el('span', { class: 'badge ' + cls }, status)),
+      el('div', { class: 'meta' }, `${d.address} · ${d.driver}`),
+      el('div', { class: 'meta' }, `Last backup: ${lastBackup}`),
+      el('div', {},
+        el('div', { class: 'meta' }, score == null
+          ? `Compliance: — (${ruleCount} rule${ruleCount === 1 ? '' : 's'} configured)`
+          : `Compliance: ${score}%`),
+        el('div', { class: 'compl-track' },
+          el('div', { class: 'fill ' + cls, style: `width:${score == null ? 0 : score}%` }))),
+      el('div', { class: 'footer' },
+        el('span', {}, `cred ${d.credential_id ? '#' + d.credential_id : '—'}`),
+        el('span', {}, '#' + d.id)),
+    );
+    card.onclick = () => showDevice(d.id);
+    host.appendChild(card);
+  }
+}
+
+async function safeCount(path) {
+  try { const r = await api('GET', path); return Array.isArray(r) ? r.length : 0; }
+  catch (_) { return 0; }
+}
+
+function relativeTime(date) {
+  const sec = Math.max(0, (Date.now() - date.getTime()) / 1000);
+  if (sec < 60) return Math.floor(sec) + 's ago';
+  if (sec < 3600) return Math.floor(sec / 60) + 'm ago';
+  if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
+  return Math.floor(sec / 86400) + 'd ago';
 }
 
 async function showDevice(id) {
@@ -317,6 +396,7 @@ views.audit = (root) => {
 
   const apply = el('button', { class: 'btn' }, 'Apply');
   const clear = el('button', { class: 'btn ghost', type: 'button' }, 'Clear');
+  const csv   = el('button', { class: 'btn ghost', type: 'button' }, 'Export CSV');
 
   filterBar.append(
     mkField('User ID', fUser),
@@ -326,7 +406,7 @@ views.audit = (root) => {
     mkField('Until',  fUntil),
     mkField('Limit',  fLimit),
     el('div', { class: 'field' }, el('label', {}, '\u00a0'),
-      el('div', { class: 'actions' }, apply, clear)),
+      el('div', { class: 'actions' }, apply, clear, csv)),
   );
   root.appendChild(filterBar);
 
@@ -364,6 +444,20 @@ views.audit = (root) => {
     fUser.value = ''; fAction.value = ''; fTarget.value = '';
     fSince.value = ''; fUntil.value = ''; fLimit.value = '100';
     load();
+  });
+  csv.addEventListener('click', () => {
+    // Build the same query string used by load(), then ask the browser to
+    // download it. credentials:'same-origin' is the default for top-level
+    // navigations so the session cookie travels along.
+    const params = new URLSearchParams();
+    if (fUser.value)   params.set('user', fUser.value);
+    if (fAction.value) params.set('action', fAction.value.trim());
+    if (fTarget.value) params.set('target', fTarget.value.trim());
+    const s = localToRFC3339(fSince.value); if (s) params.set('since', s);
+    const u = localToRFC3339(fUntil.value); if (u) params.set('until', u);
+    if (fLimit.value)  params.set('limit', fLimit.value);
+    params.set('format', 'csv');
+    window.location.href = '/api/v1/audit?' + params.toString();
   });
   load();
 };
@@ -426,7 +520,7 @@ function statusBadgeClass(status) {
   }
 }
 
-// ---------- Backups (recent change events with diff viewer) ----------
+// ---------- Backups (recent change events with two-pane Git-style diff) ----------
 views.backups = async (root) => {
   root.appendChild(el('h2', {}, 'Backups & changes'));
   const layout = el('div', { class: 'inventory' });
@@ -469,23 +563,125 @@ async function showChange(c) {
     `${c.artifact} • device ${c.device_id} • ` +
     `${new Date(c.created_at).toLocaleString()} • ` +
     `+${c.added_lines}/-${c.removed_lines}`));
+  const actionsRow = el('div', { class: 'actions' });
   if (!c.reviewed) {
     const btn = el('button', { class: 'btn' }, 'Mark reviewed');
     btn.onclick = async () => {
       try { await api('POST', `/changes/${c.id}/review`); btn.disabled = true; btn.textContent = 'Reviewed'; }
       catch (e) { alert('Failed: ' + e.message); }
     };
-    detail.appendChild(el('div', { class: 'actions' }, btn));
+    actionsRow.appendChild(btn);
   } else {
-    detail.appendChild(el('span', { class: 'badge ok' }, 'reviewed'));
+    actionsRow.appendChild(el('span', { class: 'badge ok' }, 'reviewed'));
   }
+  // Rollback always proposes — never applies directly.
+  if (c.device_id && c.old_sha) {
+    const rb = el('button', { class: 'btn ghost' }, 'Propose rollback to previous');
+    rb.onclick = async () => {
+      if (!confirm(`Open a rollback proposal for device #${c.device_id} to commit ${c.old_sha.slice(0,8)}?`)) return;
+      try {
+        await api('POST', `/devices/${c.device_id}/rollback`, {
+          artifact: c.artifact || 'running-config', target_sha: c.old_sha,
+        });
+        alert('Rollback proposal created. See Approvals.');
+        location.hash = '#/approvals';
+      } catch (e) { alert('Failed: ' + e.message); }
+    };
+    actionsRow.appendChild(rb);
+  }
+  detail.appendChild(actionsRow);
+
   detail.appendChild(el('h3', {}, 'Diff'));
   try {
     const d = await api('GET', `/changes/${c.id}/diff`);
-    detail.appendChild(el('pre', { class: 'config' }, d || '(no diff)'));
+    detail.appendChild(renderTwoPaneDiff(d || ''));
   } catch (e) {
     detail.appendChild(el('p', { class: 'error' }, 'Could not load diff: ' + e.message));
   }
+}
+
+// renderTwoPaneDiff converts a unified diff into a side-by-side Git-style view.
+//
+// The input is the raw unified-diff text returned by /changes/{id}/diff.
+// We parse hunks, then for each hunk fan lines into a left (before) and right
+// (after) column so add/del rows align. Context lines appear in both columns.
+//
+// This is an intentionally minimal renderer: we do not compute intra-line
+// highlights. For the common NCM case (line-level edits) it is dramatically
+// clearer than a single-pane unified diff.
+function renderTwoPaneDiff(text) {
+  const wrap = el('div');
+  wrap.appendChild(el('div', { class: 'diff-toolbar' },
+    el('span', {}, 'Side-by-side diff'),
+    el('span', { class: 'legend' },
+      el('span', { class: 'swatch del' }), 'removed'),
+    el('span', { class: 'legend' },
+      el('span', { class: 'swatch add' }), 'added')));
+  const pane = el('div', { class: 'diff-twopane' });
+  const left  = el('div', {}, el('div', { class: 'pane-head' }, 'before'));
+  const right = el('div', { class: 'right' }, el('div', { class: 'pane-head' }, 'after'));
+  pane.append(left, right);
+  if (!text) {
+    left.appendChild(el('div', { class: 'diff-row' },
+      el('span', { class: 'ln' }, ''), el('span', { class: 'src muted' }, '(no diff)')));
+    right.appendChild(el('div', { class: 'diff-row' },
+      el('span', { class: 'ln' }, ''), el('span', { class: 'src muted' }, '(no diff)')));
+    wrap.appendChild(pane);
+    return wrap;
+  }
+
+  const row = (col, cls, lnLabel, src) => {
+    col.appendChild(el('div', { class: 'diff-row ' + cls },
+      el('span', { class: 'ln' }, lnLabel == null ? '' : String(lnLabel)),
+      el('span', { class: 'src' }, src)));
+  };
+
+  let lnA = 0, lnB = 0;
+  const lines = text.split(/\r?\n/);
+  // Buffers of pending del/add to align them within a hunk.
+  let dels = [], adds = [];
+  const flush = () => {
+    const n = Math.max(dels.length, adds.length);
+    for (let i = 0; i < n; i++) {
+      if (i < dels.length) {
+        row(left, 'del', ++lnA, dels[i]);
+      } else {
+        row(left, '', '', '');
+      }
+      if (i < adds.length) {
+        row(right, 'add', ++lnB, adds[i]);
+      } else {
+        row(right, '', '', '');
+      }
+    }
+    dels = []; adds = [];
+  };
+
+  for (const ln of lines) {
+    if (ln.startsWith('---') || ln.startsWith('+++') || ln.startsWith('diff ') || ln.startsWith('index ')) {
+      // file headers — skip in the rendered view
+      continue;
+    }
+    if (ln.startsWith('@@')) {
+      flush();
+      // Parse "@@ -a,b +c,d @@" to reset line counters.
+      const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(ln);
+      if (m) { lnA = Number(m[1]) - 1; lnB = Number(m[2]) - 1; }
+      row(left,  'hunk', '', ln);
+      row(right, 'hunk', '', ln);
+      continue;
+    }
+    if (ln.startsWith('+')) { adds.push(ln.slice(1)); continue; }
+    if (ln.startsWith('-')) { dels.push(ln.slice(1)); continue; }
+    // context line (or empty)
+    flush();
+    const ctx = ln.startsWith(' ') ? ln.slice(1) : ln;
+    row(left,  '', ++lnA, ctx);
+    row(right, '', ++lnB, ctx);
+  }
+  flush();
+  wrap.appendChild(pane);
+  return wrap;
 }
 
 // ---------- Compliance (rules + findings) ----------
@@ -612,44 +808,151 @@ views.compliance = async (root) => {
   await renderFindings();
 };
 
-// ---------- Topology (LLDP/CDP node + link tables) ----------
+// ---------- Topology (interactive SVG canvas with hand-rolled force layout) ----------
 views.topology = async (root) => {
   root.appendChild(el('h2', {}, 'Topology'));
-  root.appendChild(el('p', { class: 'muted' },
-    'Discovered links from LLDP/CDP neighbour reports. A graph canvas renderer is tracked as Phase 11+ work.'));
   let data;
   try { data = await api('GET', '/topology'); }
   catch (e) { root.appendChild(errorState('Error: ' + e.message)); return; }
   const links = (data && data.links) || [];
   if (!links.length) {
-    root.appendChild(emptyState('No topology links recorded yet.'));
+    root.appendChild(emptyState('No topology links recorded yet — install LLDP/CDP probes to populate this view.'));
     return;
   }
-  // Derive node set
-  const nodes = new Set();
-  for (const l of links) { nodes.add(l.a); nodes.add(l.b); }
-
-  const nodesCard = el('div', { class: 'card' },
-    el('h3', {}, `Nodes (${nodes.size})`));
-  const nodeList = el('ul');
-  for (const n of [...nodes].sort()) nodeList.appendChild(el('li', {}, n));
-  nodesCard.appendChild(nodeList);
-
-  const linksCard = el('div', { class: 'card' },
-    el('h3', {}, `Links (${links.length})`));
-  const t = el('table', { class: 'data' });
-  t.innerHTML = '<thead><tr><th>A</th><th>A port</th><th>B</th><th>B port</th></tr></thead>';
-  const tb = el('tbody');
-  for (const l of links) {
-    tb.appendChild(el('tr', {},
-      el('td', {}, l.a), el('td', {}, el('code', {}, l.a_port)),
-      el('td', {}, l.b), el('td', {}, el('code', {}, l.b_port)),
-    ));
+  // Optional: also load devices so we can colour nodes by compliance.
+  let devices = [], findings = [];
+  try { devices = await api('GET', '/devices'); } catch (_) {}
+  try { findings = await api('GET', '/compliance/findings'); } catch (_) {}
+  const failsByHost = {};
+  const devByHost = {};
+  for (const d of devices) devByHost[d.hostname] = d;
+  for (const f of (findings || [])) {
+    if (f.status !== 'fail') continue;
+    const dev = devices.find((x) => x.id === f.device_id);
+    if (dev) failsByHost[dev.hostname] = (failsByHost[dev.hostname] || 0) + 1;
   }
-  t.appendChild(tb);
-  linksCard.appendChild(t);
-  root.append(nodesCard, linksCard);
+
+  const wrap = el('div', { class: 'topo-wrap' });
+  const legend = el('div', { class: 'legend' },
+    el('span', {}, el('span', { class: 'dot', style: 'background:var(--status-ok)' }), 'ok'),
+    el('span', {}, el('span', { class: 'dot', style: 'background:var(--status-warn)' }), 'drift'),
+    el('span', {}, el('span', { class: 'dot', style: 'background:var(--status-bad)' }), 'violation'),
+    el('span', {}, el('span', { class: 'dot', style: 'background:var(--text-muted)' }), 'unknown'));
+  wrap.appendChild(legend);
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 1000 540');
+  wrap.appendChild(svg);
+  const sidePanel = el('aside', { class: 'side-panel', hidden: true, id: 'topo-side' });
+  wrap.appendChild(sidePanel);
+  root.appendChild(wrap);
+
+  // Build node + edge sets.
+  const nodeNames = new Set();
+  for (const l of links) { nodeNames.add(l.a); nodeNames.add(l.b); }
+  const nodes = [...nodeNames].map((name, i) => {
+    // initial layout: ring (deterministic, no jitter on reload)
+    const angle = (i / nodeNames.size) * Math.PI * 2;
+    return {
+      name,
+      x: 500 + Math.cos(angle) * 200,
+      y: 270 + Math.sin(angle) * 180,
+      vx: 0, vy: 0,
+    };
+  });
+  const idx = Object.fromEntries(nodes.map((n, i) => [n.name, i]));
+  const edges = links.map((l) => ({ a: idx[l.a], b: idx[l.b], aPort: l.a_port, bPort: l.b_port }));
+
+  // Hand-rolled spring layout: ~120 iterations is enough for graphs ≤ 100 nodes.
+  // Repulsion (Coulomb-like) between every pair, attraction (Hooke) along edges.
+  const W = 1000, H = 540, ITER = 200;
+  for (let it = 0; it < ITER; it++) {
+    // Repulsion
+    for (let i = 0; i < nodes.length; i++) {
+      let fx = 0, fy = 0;
+      for (let j = 0; j < nodes.length; j++) {
+        if (i === j) continue;
+        const dx = nodes[i].x - nodes[j].x;
+        const dy = nodes[i].y - nodes[j].y;
+        const dist2 = dx * dx + dy * dy + 0.01;
+        const f = 9000 / dist2;
+        fx += dx * f / Math.sqrt(dist2);
+        fy += dy * f / Math.sqrt(dist2);
+      }
+      nodes[i].vx = (nodes[i].vx + fx) * 0.5;
+      nodes[i].vy = (nodes[i].vy + fy) * 0.5;
+    }
+    // Attraction along edges (target length 130)
+    for (const e of edges) {
+      const A = nodes[e.a], B = nodes[e.b];
+      const dx = B.x - A.x, dy = B.y - A.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
+      const f = (dist - 130) * 0.05;
+      const fx = dx / dist * f, fy = dy / dist * f;
+      A.vx += fx; A.vy += fy;
+      B.vx -= fx; B.vy -= fy;
+    }
+    // Centering & bound
+    for (const n of nodes) {
+      n.vx += (W / 2 - n.x) * 0.001;
+      n.vy += (H / 2 - n.y) * 0.001;
+      n.x += Math.max(-15, Math.min(15, n.vx));
+      n.y += Math.max(-15, Math.min(15, n.vy));
+      n.x = Math.max(40, Math.min(W - 40, n.x));
+      n.y = Math.max(40, Math.min(H - 40, n.y));
+    }
+  }
+
+  // Render edges first so nodes draw on top.
+  for (const e of edges) {
+    const A = nodes[e.a], B = nodes[e.b];
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', A.x); line.setAttribute('y1', A.y);
+    line.setAttribute('x2', B.x); line.setAttribute('y2', B.y);
+    line.setAttribute('class', 'topo-edge');
+    svg.appendChild(line);
+  }
+  for (const n of nodes) {
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    g.setAttribute('class', 'topo-node');
+    g.setAttribute('transform', `translate(${n.x},${n.y})`);
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('r', 10);
+    const f = failsByHost[n.name] || 0;
+    let cls = 'unknown';
+    if (devByHost[n.name]) cls = f === 0 ? 'ok' : (f >= 3 ? 'bad' : 'warn');
+    circle.setAttribute('class', cls);
+    const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    t.setAttribute('y', 24);
+    t.textContent = n.name;
+    g.append(circle, t);
+    g.addEventListener('click', () => showTopologyNode(n.name, devByHost[n.name], failsByHost[n.name] || 0));
+    svg.appendChild(g);
+  }
 };
+
+function showTopologyNode(name, device, fails) {
+  const side = $('#topo-side');
+  if (!side) return;
+  side.hidden = false;
+  side.innerHTML = '';
+  side.appendChild(el('h3', {}, name));
+  if (!device) {
+    side.appendChild(el('p', { class: 'muted' },
+      'Discovered via neighbour reports but not registered as a managed device.'));
+    return;
+  }
+  side.appendChild(el('p', { class: 'muted' },
+    `${device.driver} • ${device.address}:${device.port}`));
+  const status = fails === 0 ? 'compliant' : (fails >= 3 ? 'violation' : 'drift');
+  const cls = fails === 0 ? 'ok' : (fails >= 3 ? 'bad' : 'warn');
+  side.appendChild(el('p', {}, el('span', { class: 'badge ' + cls }, status),
+    ' ', String(fails) + ' failing rule' + (fails === 1 ? '' : 's')));
+  const open = el('button', { class: 'btn' }, 'Open device →');
+  open.onclick = () => { location.hash = '#/inventory'; setTimeout(() => showDevice(device.id), 50); };
+  const close = el('button', { class: 'btn ghost' }, 'Close');
+  close.onclick = () => { side.hidden = true; };
+  side.appendChild(el('div', { class: 'actions' }, open, close));
+}
 
 // ---------- Approvals (change-request queue) ----------
 views.approvals = async (root) => {
@@ -762,6 +1065,177 @@ views.settings = async (root) => {
     dst.appendChild(t);
   }
 };
+
+// ===========================================================
+// Dashboard
+// ===========================================================
+//
+// One server round-trip (`/dashboard/summary`) populates: stat cards with
+// inline SVG sparklines, the per-driver compliance bars, drift hotspots,
+// the recent-events timeline, and the cluster health card. No external
+// chart library — see app.css for the .dash-* / .driver-bar / .timeline
+// styles.
+views.dashboard = async (root) => {
+  root.appendChild(el('h2', {}, 'Dashboard'));
+  let s;
+  try { s = await api('GET', '/dashboard/summary'); }
+  catch (e) { root.appendChild(errorState('Error: ' + e.message)); return; }
+
+  const fmtPct = (v) => (v == null ? '—' : `${v.toFixed(1)}%`);
+  const fmtInt = (v) => (v == null ? '—' : v.toLocaleString());
+
+  // --- top stat row ---
+  const stats = el('div', { class: 'dash-grid' });
+  stats.append(
+    statCard('Devices', fmtInt(s.devices.total),
+      s.devices.added_recent ? `+${s.devices.added_recent} this week` : 'no new devices',
+      null),
+    statCard('Compliance', fmtPct(s.compliance.percent),
+      `${s.compliance.pass_count} pass · ${s.compliance.fail_count} fail`,
+      s.compliance.sparkline_14d),
+    statCard('Backups (24h)', fmtPct(s.backups.success_rate_24h),
+      `${s.backups.total_24h} run${s.backups.total_24h === 1 ? '' : 's'}`,
+      s.backups.sparkline_14d),
+    statCard('Approvals', String(s.approvals.pending),
+      s.approvals.oldest_age ? `oldest ${s.approvals.oldest_age}` : 'queue empty',
+      null),
+  );
+  root.appendChild(stats);
+
+  // --- two-column body ---
+  const body = el('div', { class: 'dash-cols' });
+
+  // Left column: status by driver, drift hotspots
+  const leftCol = el('div');
+  const driverCard = el('div', { class: 'card' },
+    el('h3', {}, 'Status by driver'));
+  if (!s.status_by_driver.length) {
+    driverCard.appendChild(el('p', { class: 'muted' }, 'No devices yet.'));
+  } else {
+    for (const d of s.status_by_driver) {
+      const fillCls = d.percent >= 90 ? 'ok' : (d.percent >= 70 ? 'warn' : 'bad');
+      driverCard.appendChild(el('div', { class: 'driver-bar' },
+        el('span', {}, `${d.driver} (${d.compliant}/${d.total})`),
+        el('span', { class: 'track' },
+          el('span', { class: 'fill ' + fillCls, style: `width:${d.percent}%` })),
+        el('span', { class: 'pct' }, `${d.percent}%`)));
+    }
+  }
+  leftCol.appendChild(driverCard);
+
+  const driftCard = el('div', { class: 'card' },
+    el('h3', {}, 'Drift hotspots'));
+  if (!s.drift_hotspots.length) {
+    driftCard.appendChild(el('p', { class: 'muted' }, 'No failing rules — nice.'));
+  } else {
+    for (const h of s.drift_hotspots) {
+      const link = el('a', { href: '#/inventory', class: 'hotspot' },
+        el('span', {},
+          el('span', { class: 'status-dot bad' }), ' ',
+          el('strong', {}, h.hostname || `device ${h.device_id}`),
+          ' ',
+          el('span', { class: 'detail' }, `${h.failing} failing`)),
+        el('span', { class: 'detail' }, h.top_detail || ''));
+      link.onclick = () => { setTimeout(() => showDevice(h.device_id), 50); };
+      driftCard.appendChild(link);
+    }
+  }
+  leftCol.appendChild(driftCard);
+  body.appendChild(leftCol);
+
+  // Right column: recent events, health
+  const rightCol = el('div');
+  const eventsCard = el('div', { class: 'card' },
+    el('h3', {}, 'Recent events'));
+  if (!s.recent_events.length) {
+    eventsCard.appendChild(el('p', { class: 'muted' }, 'No audit entries yet.'));
+  } else {
+    const list = el('ul', { class: 'timeline' });
+    for (const e of s.recent_events.slice(0, 10)) {
+      const t = new Date(e.created_at);
+      const hh = String(t.getHours()).padStart(2, '0');
+      const mm = String(t.getMinutes()).padStart(2, '0');
+      list.appendChild(el('li', {},
+        el('span', { class: 'when' }, `${hh}:${mm}`),
+        el('code', {}, e.action || ''),
+        el('span', { class: 'what' }, e.target || e.detail || '')));
+    }
+    eventsCard.appendChild(list);
+    eventsCard.appendChild(el('p', { class: 'muted' },
+      el('a', { href: '#/audit' }, 'See all in Audit →')));
+  }
+  rightCol.appendChild(eventsCard);
+
+  const healthCard = el('div', { class: 'card health' },
+    el('h3', {}, 'Health'),
+    el('dl', {},
+      el('dt', {}, 'Pollers'),
+      el('dd', {}, `${s.health.pollers_healthy}/${s.health.pollers_total} healthy`),
+      el('dt', {}, 'Git mirror'),
+      el('dd', {}, s.health.git_mirror.replace('_', ' '))));
+  rightCol.appendChild(healthCard);
+  body.appendChild(rightCol);
+
+  root.appendChild(body);
+
+  // Refresh approvals badge with the count we just fetched.
+  applyApprovalsBadge(s.approvals.pending);
+};
+
+// statCard returns a single .dash-stat tile. `series` may be null (no spark).
+function statCard(label, value, sub, series) {
+  const card = el('div', { class: 'dash-stat' },
+    el('div', { class: 'label' }, label),
+    el('div', { class: 'value' }, value));
+  if (series && series.length) card.appendChild(sparkline(series));
+  card.appendChild(el('div', { class: 'sub' }, sub));
+  return card;
+}
+
+// sparkline renders a 14-bucket SVG polyline with a soft fill underneath.
+// Hand-rolled to avoid pulling in a chart library — the design tokens
+// (--accent, --accent-soft) drive the colour so it themes for free.
+function sparkline(values) {
+  const W = 140, H = 32, PAD = 2;
+  const max = 100; // values are percentages 0..100
+  const n = values.length;
+  if (!n) return el('span');
+  const step = (W - PAD * 2) / (n - 1 || 1);
+  const pts = values.map((v, i) => {
+    const x = PAD + i * step;
+    const y = H - PAD - (Math.max(0, Math.min(max, v)) / max) * (H - PAD * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'spark');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('preserveAspectRatio', 'none');
+  // Filled area first, line on top.
+  const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+  poly.setAttribute('points', `${PAD},${H - PAD} ${pts.join(' ')} ${W - PAD},${H - PAD}`);
+  const line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+  line.setAttribute('points', pts.join(' '));
+  svg.append(poly, line);
+  return svg;
+}
+
+// refreshApprovalsBadge fetches the pending-approvals count for the
+// sidebar badge. Called on session refresh; the dashboard view also
+// updates the badge from its summary payload to avoid an extra request.
+async function refreshApprovalsBadge() {
+  try {
+    const rows = await api('GET', '/change-requests?status=submitted');
+    applyApprovalsBadge((rows || []).length);
+  } catch (_) { /* ignore — badge stays hidden */ }
+}
+
+function applyApprovalsBadge(n) {
+  const b = $('#approvals-badge');
+  if (!b) return;
+  if (!n || n <= 0) { b.hidden = true; return; }
+  b.hidden = false;
+  b.textContent = String(n > 99 ? '99+' : n);
+}
 
 // ===========================================================
 // Login form + logout wiring
