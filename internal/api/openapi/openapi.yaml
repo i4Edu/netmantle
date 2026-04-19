@@ -177,7 +177,7 @@ paths:
   /changes:
     get:
       summary: List ChangeEvents (most recent first)
-      x-stability: stable
+      x-stability: frozen
       responses:
         '200':
           description: OK
@@ -187,7 +187,7 @@ paths:
   /changes/{id}/diff:
     get:
       summary: Get unified diff for a ChangeEvent
-      x-stability: stable
+      x-stability: frozen
       parameters: [{$ref: '#/components/parameters/Id'}]
       responses:
         '200':
@@ -197,7 +197,7 @@ paths:
   /changes/{id}/review:
     post:
       summary: Mark a ChangeEvent as reviewed
-      x-stability: stable
+      x-stability: frozen
       parameters: [{$ref: '#/components/parameters/Id'}]
       responses:
         '204': {description: Marked reviewed}

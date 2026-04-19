@@ -155,8 +155,19 @@ func TestBackupDiffComplianceWorkflow(t *testing.T) {
 		t.Fatalf("expected %d events after change, got %d", initialCount+1, len(evsAfter))
 	}
 
-	// The newest event has non-zero diff counts.
-	ev := evsAfter[0]
+	// Find the event that represents the diff between backup #1 and backup #2:
+	// it is the one with a non-empty OldSHA (it has a predecessor). The initial
+	// backup produces an event with an empty OldSHA (diff vs the empty baseline).
+	var ev changes.Event
+	for _, e := range evsAfter {
+		if e.OldSHA != "" {
+			ev = e
+			break
+		}
+	}
+	if ev.ID == 0 {
+		t.Fatal("could not find a change event with a predecessor (OldSHA)")
+	}
 	if ev.Added == 0 && ev.Removed == 0 {
 		t.Fatalf("change event has no added/removed lines: %+v", ev)
 	}
@@ -284,7 +295,11 @@ func TestComplianceTransitionNotification(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create rule: %v", err)
 	}
-	_ = rule
+	// Verify the rule was stored with a valid ID; the transition assertions
+	// below rely on the rule existing in the database.
+	if rule.ID == 0 {
+		t.Fatal("expected non-zero rule ID")
+	}
 
 	// First evaluation: no prior finding → no transition callback.
 	_, _ = svc.EvaluateDevice(ctx, env.tenantID, env.devID, "hostname x\n")
