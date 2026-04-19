@@ -26,19 +26,29 @@ type Service struct{ DB *sql.DB }
 // New constructs a Service.
 func New(db *sql.DB) *Service { return &Service{DB: db} }
 
-// Create inserts a tenant and its quota row.
+// Create inserts a tenant and its quota row inside a single transaction
+// so a failed quota insert never leaves an orphan tenant row.
 func (s *Service) Create(ctx context.Context, name string, maxDevices int) (Tenant, error) {
 	if name == "" {
 		return Tenant{}, errors.New("tenants: name required")
 	}
 	now := time.Now().UTC()
-	res, err := s.DB.ExecContext(ctx, `INSERT INTO tenants(name, created_at) VALUES(?, ?)`, name, now.Format(time.RFC3339))
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return Tenant{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx, `INSERT INTO tenants(name, created_at) VALUES(?, ?)`, name, now.Format(time.RFC3339))
 	if err != nil {
 		return Tenant{}, err
 	}
 	id, _ := res.LastInsertId()
-	if _, err := s.DB.ExecContext(ctx,
+	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO tenant_quotas(tenant_id, max_devices) VALUES(?, ?)`, id, maxDevices); err != nil {
+		return Tenant{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return Tenant{}, err
 	}
 	return Tenant{ID: id, Name: name, MaxDevices: maxDevices, CreatedAt: now}, nil

@@ -19,13 +19,12 @@ func Handler() http.Handler {
 	}
 	fileServer := http.FileServer(http.FS(sub))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Pass /api/* through (it's only here defensively; the API mux
-		// already matches those routes).
 		path := r.URL.Path
 		if path == "/" {
 			path = "/index.html"
 		}
-		// If the file does not exist, fall back to index.html.
+		// SPA fallback: if the requested file does not exist, serve
+		// index.html so client-side routes (e.g. /devices/42) resolve.
 		if _, err := fs.Stat(sub, trimLeadingSlash(path)); err != nil {
 			r.URL.Path = "/index.html"
 		}

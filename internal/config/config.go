@@ -1,6 +1,10 @@
 // Package config loads NetMantle configuration from a YAML file and from
-// environment variables. Env vars use the prefix NETMANTLE_ and dot-paths
-// translate to underscores: server.address -> NETMANTLE_SERVER_ADDRESS.
+// environment variables. Env vars use the prefix NETMANTLE_ and follow a
+// hand-maintained allowlist (see applyEnv); the most common knobs are
+// NETMANTLE_SERVER_ADDRESS, NETMANTLE_DATABASE_DSN,
+// NETMANTLE_STORAGE_CONFIG_REPO_ROOT and
+// NETMANTLE_SECURITY_MASTER_PASSPHRASE. Anything not listed in applyEnv
+// must be set in the YAML file.
 package config
 
 import (

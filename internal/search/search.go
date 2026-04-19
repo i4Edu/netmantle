@@ -17,12 +17,15 @@ type Service struct{ DB *sql.DB }
 func New(db *sql.DB) *Service { return &Service{DB: db} }
 
 // Index inserts a single (tenant,device,artifact,sha) document into the
-// FTS5 table. It is idempotent on (device_id, commit_sha, artifact).
+// FTS5 table. Only the latest indexed version is retained per
+// (tenant_id, device_id, artifact); older rows are removed so Query
+// returns exactly one hit per device+artifact for any given match.
 func (s *Service) Index(ctx context.Context, tenantID, deviceID int64, artifact, sha string, body []byte) error {
-	// Idempotency: delete any existing row for this (device,artifact,sha).
-	_, _ = s.DB.ExecContext(ctx,
-		`DELETE FROM config_search WHERE device_id = ? AND commit_sha = ? AND artifact = ?`,
-		deviceID, sha, artifact)
+	if _, err := s.DB.ExecContext(ctx,
+		`DELETE FROM config_search WHERE tenant_id = ? AND device_id = ? AND artifact = ?`,
+		tenantID, deviceID, artifact); err != nil {
+		return err
+	}
 	_, err := s.DB.ExecContext(ctx,
 		`INSERT INTO config_search(artifact, body, device_id, commit_sha, tenant_id) VALUES(?, ?, ?, ?, ?)`,
 		artifact, string(body), deviceID, sha, tenantID)

@@ -76,10 +76,21 @@ func (s *Service) Handler(deviceIDFn func(*http.Request) (tenantID, userID, devi
 		}
 		defer conn.Close()
 
+		// All writes to the hijacked conn must go through this single
+		// mutex: the device→browser goroutine, the ping/close handler
+		// in the request loop, and the connect-error path can otherwise
+		// interleave bytes inside one frame.
+		var writeMu sync.Mutex
+		safeWrite := func(op byte, payload []byte) error {
+			writeMu.Lock()
+			defer writeMu.Unlock()
+			return writeFrame(conn, op, payload)
+		}
+
 		backend, err := s.Factory(r.Context(), tenantID, deviceID)
 		if err != nil {
-			_ = writeFrame(conn, opText, []byte("connect error: "+err.Error()))
-			_ = writeFrame(conn, opClose, nil)
+			_ = safeWrite(opText, []byte("connect error: "+err.Error()))
+			_ = safeWrite(opClose, nil)
 			return
 		}
 		defer backend.Close()
@@ -111,12 +122,12 @@ func (s *Service) Handler(deviceIDFn func(*http.Request) (tenantID, userID, devi
 				n, err := backend.Read(buf)
 				if n > 0 {
 					recordOut(buf[:n])
-					if err := writeFrame(conn, opText, buf[:n]); err != nil {
+					if err := safeWrite(opText, buf[:n]); err != nil {
 						return
 					}
 				}
 				if err != nil {
-					_ = writeFrame(conn, opClose, nil)
+					_ = safeWrite(opClose, nil)
 					return
 				}
 			}
@@ -126,6 +137,10 @@ func (s *Service) Handler(deviceIDFn func(*http.Request) (tenantID, userID, devi
 		for {
 			op, payload, err := readFrame(brw)
 			if err != nil {
+				if errors.Is(err, errUnmaskedFrame) {
+					// 1002 = protocol error. Best-effort close payload.
+					_ = safeWrite(opClose, []byte{0x03, 0xea})
+				}
 				break
 			}
 			switch op {
@@ -135,7 +150,7 @@ func (s *Service) Handler(deviceIDFn func(*http.Request) (tenantID, userID, devi
 					goto done
 				}
 			case opPing:
-				_ = writeFrame(conn, opPong, payload)
+				_ = safeWrite(opPong, payload)
 			case opClose:
 				goto done
 			}
@@ -193,7 +208,12 @@ func acceptKey(key string) string {
 	return base64.StdEncoding.EncodeToString(h[:])
 }
 
-// readFrame reads a single client→server frame (always masked per RFC 6455).
+// errUnmaskedFrame is returned when a client→server frame arrives without
+// the masking bit set, which is a protocol error per RFC 6455 §5.1.
+var errUnmaskedFrame = errors.New("terminal: client frame must be masked")
+
+// readFrame reads a single client→server frame. RFC 6455 requires every
+// client→server frame to be masked; unmasked frames are rejected.
 func readFrame(br *bufio.ReadWriter) (op byte, payload []byte, err error) {
 	hdr := make([]byte, 2)
 	if _, err := io.ReadFull(br, hdr); err != nil {
@@ -201,6 +221,9 @@ func readFrame(br *bufio.ReadWriter) (op byte, payload []byte, err error) {
 	}
 	op = hdr[0] & 0x0f
 	masked := hdr[1]&0x80 != 0
+	if !masked {
+		return 0, nil, errUnmaskedFrame
+	}
 	plen := int(hdr[1] & 0x7f)
 	switch plen {
 	case 126:
@@ -221,19 +244,15 @@ func readFrame(br *bufio.ReadWriter) (op byte, payload []byte, err error) {
 		plen = int(v)
 	}
 	var mask [4]byte
-	if masked {
-		if _, err := io.ReadFull(br, mask[:]); err != nil {
-			return 0, nil, err
-		}
+	if _, err := io.ReadFull(br, mask[:]); err != nil {
+		return 0, nil, err
 	}
 	payload = make([]byte, plen)
 	if _, err := io.ReadFull(br, payload); err != nil {
 		return 0, nil, err
 	}
-	if masked {
-		for i := range payload {
-			payload[i] ^= mask[i%4]
-		}
+	for i := range payload {
+		payload[i] ^= mask[i%4]
 	}
 	return op, payload, nil
 }

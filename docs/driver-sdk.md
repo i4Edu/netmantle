@@ -36,8 +36,28 @@ A driver should:
 4. Return a `[]ConfigArtifact` — never log secrets.
 
 Builtin drivers live under `internal/drivers/builtin/` and self-register via
-`init()` into the global `drivers.Registry`. To add a new driver:
+`init()` using the package-level `drivers.Register` API. To add a new driver:
 
 1. Create `internal/drivers/builtin/<name>.go` implementing `Driver`.
 2. Add a unit test using the `drivers/fakesession` helper.
 3. Document any prompt or paging quirks in a comment.
+
+## Builtin drivers
+
+The following platforms ship in `internal/drivers/builtin` and are registered
+under these names:
+
+| Driver name        | Platform                                | Notes                                        |
+|--------------------|-----------------------------------------|----------------------------------------------|
+| `cisco_ios`        | Cisco IOS / IOS-XE                      | `terminal length 0`; running + optional startup |
+| `cisco_nxos`       | Cisco Nexus (NX-OS)                     | `terminal length 0`; running + optional startup |
+| `cisco_iosxr`      | Cisco IOS-XR                            | `terminal length 0`; running-config            |
+| `arista_eos`       | Arista EOS                              | `terminal length 0`; running-config            |
+| `junos_cli`        | Juniper Junos (CLI)                     | `set cli screen-length 0`; `show configuration | display set` |
+| `mikrotik_routeros`| MikroTik RouterOS                       | `/export`                                    |
+| `nokia_sros`       | Nokia SR OS / TiMOS                     | `environment no more`; `admin display-config`   |
+| `bdcom_os`         | BDCOM OLT / switch                      | Cisco-style CLI                              |
+| `vsol_os`          | V-SOL OLT                               | `enable`; Cisco-style CLI                    |
+| `dbc_os`           | DBC OLT                                 | `enable`; Cisco-style CLI                    |
+| `generic_ssh`      | Fallback for unknown platforms          | tries `show configuration` then `show running-config` |
+| `cisco_netconf`, `junos_netconf`, `restconf`, `gnmi` | Phase 10 modern transports | Registered as stubs; backup wiring is roadmap work |

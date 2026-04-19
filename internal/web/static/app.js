@@ -151,10 +151,16 @@ async function showDevice(id) {
     const tbody = document.createElement('tbody');
     for (const r of runs) {
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td>${new Date(r.started_at).toLocaleString()}</td>
-        <td class="status-${r.status}">${r.status}</td>
-        <td>${(r.commit_sha || '').slice(0, 8)}</td>
-        <td>${r.error || ''}</td>`;
+      const tdStart = document.createElement('td');
+      tdStart.textContent = new Date(r.started_at).toLocaleString();
+      const tdStatus = document.createElement('td');
+      tdStatus.className = 'status-' + r.status;
+      tdStatus.textContent = r.status;
+      const tdCommit = document.createElement('td');
+      tdCommit.textContent = (r.commit_sha || '').slice(0, 8);
+      const tdErr = document.createElement('td');
+      tdErr.textContent = r.error || '';
+      tr.append(tdStart, tdStatus, tdCommit, tdErr);
       tbody.appendChild(tr);
     }
     table.appendChild(tbody);

@@ -14,9 +14,15 @@ import (
 
 func init() {
 	drivers.Register(&ciscoIOS{})
+	drivers.Register(&ciscoNXOS{})
+	drivers.Register(&ciscoIOSXR{})
 	drivers.Register(&aristaEOS{})
 	drivers.Register(&junosCLI{})
 	drivers.Register(&mikrotikROS{})
+	drivers.Register(&nokiaSROS{})
+	drivers.Register(&bdcomOS{})
+	drivers.Register(&vsolOS{})
+	drivers.Register(&dbcOS{})
 	drivers.Register(&genericSSH{})
 	drivers.Register(&netconfStub{name: "cisco_netconf"})
 	drivers.Register(&netconfStub{name: "junos_netconf"})
@@ -161,4 +167,131 @@ func (n *netconfStub) Name() string { return n.name }
 
 func (n *netconfStub) FetchConfig(ctx context.Context, _ drivers.Session) ([]drivers.ConfigArtifact, error) {
 	return nil, fmt.Errorf("%s: NETCONF/RESTCONF/gNMI driver is scaffolded; backup wiring lands in a follow-up PR", n.name)
+}
+
+// ciscoNXOS implements Cisco Nexus (NX-OS) backup. NX-OS shares Cisco's
+// "terminal length 0" paging knob with IOS but ships a distinct CLI.
+type ciscoNXOS struct{}
+
+func (ciscoNXOS) Name() string { return "cisco_nxos" }
+
+func (ciscoNXOS) FetchConfig(ctx context.Context, s drivers.Session) ([]drivers.ConfigArtifact, error) {
+	if _, err := s.Run(ctx, "terminal length 0"); err != nil {
+		return nil, fmt.Errorf("cisco_nxos: terminal length: %w", err)
+	}
+	running, err := s.Run(ctx, "show running-config")
+	if err != nil {
+		return nil, fmt.Errorf("cisco_nxos: show running-config: %w", err)
+	}
+	out := []drivers.ConfigArtifact{
+		{Name: "running-config", Content: []byte(stripIOSChrome(running))},
+	}
+	if startup, err := s.Run(ctx, "show startup-config"); err == nil {
+		out = append(out, drivers.ConfigArtifact{
+			Name: "startup-config", Content: []byte(stripIOSChrome(startup)),
+		})
+	}
+	return out, nil
+}
+
+// ciscoIOSXR implements Cisco IOS-XR backup. IOS-XR uses
+// "terminal length 0" plus the explicit `show running-config` form.
+type ciscoIOSXR struct{}
+
+func (ciscoIOSXR) Name() string { return "cisco_iosxr" }
+
+func (ciscoIOSXR) FetchConfig(ctx context.Context, s drivers.Session) ([]drivers.ConfigArtifact, error) {
+	if _, err := s.Run(ctx, "terminal length 0"); err != nil {
+		return nil, fmt.Errorf("cisco_iosxr: terminal length: %w", err)
+	}
+	running, err := s.Run(ctx, "show running-config")
+	if err != nil {
+		return nil, fmt.Errorf("cisco_iosxr: show running-config: %w", err)
+	}
+	return []drivers.ConfigArtifact{
+		{Name: "running-config", Content: []byte(stripIOSChrome(running))},
+	}, nil
+}
+
+// nokiaSROS implements Nokia SR OS / TiMOS classic CLI backup. Paging is
+// disabled with "environment no more"; the full config is dumped via
+// "admin display-config".
+type nokiaSROS struct{}
+
+func (nokiaSROS) Name() string { return "nokia_sros" }
+
+func (nokiaSROS) FetchConfig(ctx context.Context, s drivers.Session) ([]drivers.ConfigArtifact, error) {
+	if _, err := s.Run(ctx, "environment no more"); err != nil {
+		return nil, fmt.Errorf("nokia_sros: environment no more: %w", err)
+	}
+	out, err := s.Run(ctx, "admin display-config")
+	if err != nil {
+		return nil, fmt.Errorf("nokia_sros: admin display-config: %w", err)
+	}
+	return []drivers.ConfigArtifact{
+		{Name: "running-config", Content: []byte(strings.TrimRight(out, "\n") + "\n")},
+	}, nil
+}
+
+// bdcomOS implements BDCOM (BroaDBand Communications) OLT/switch backup.
+// BDCOM CLI is Cisco-flavoured: paging is disabled via "terminal length 0"
+// and the full configuration is dumped with "show running-config".
+type bdcomOS struct{}
+
+func (bdcomOS) Name() string { return "bdcom_os" }
+
+func (bdcomOS) FetchConfig(ctx context.Context, s drivers.Session) ([]drivers.ConfigArtifact, error) {
+	if _, err := s.Run(ctx, "terminal length 0"); err != nil {
+		return nil, fmt.Errorf("bdcom_os: terminal length: %w", err)
+	}
+	running, err := s.Run(ctx, "show running-config")
+	if err != nil {
+		return nil, fmt.Errorf("bdcom_os: show running-config: %w", err)
+	}
+	return []drivers.ConfigArtifact{
+		{Name: "running-config", Content: []byte(stripIOSChrome(running))},
+	}, nil
+}
+
+// vsolOS implements V-SOL OLT backup. V-SOL devices expose a Cisco-style
+// CLI; "enable" is required for full config visibility on most models.
+type vsolOS struct{}
+
+func (vsolOS) Name() string { return "vsol_os" }
+
+func (vsolOS) FetchConfig(ctx context.Context, s drivers.Session) ([]drivers.ConfigArtifact, error) {
+	// "enable" may be a no-op when the user is already privileged; ignore
+	// failure rather than refusing to back the device up.
+	_, _ = s.Run(ctx, "enable")
+	if _, err := s.Run(ctx, "terminal length 0"); err != nil {
+		return nil, fmt.Errorf("vsol_os: terminal length: %w", err)
+	}
+	running, err := s.Run(ctx, "show running-config")
+	if err != nil {
+		return nil, fmt.Errorf("vsol_os: show running-config: %w", err)
+	}
+	return []drivers.ConfigArtifact{
+		{Name: "running-config", Content: []byte(stripIOSChrome(running))},
+	}, nil
+}
+
+// dbcOS implements DBC (DigitalBroadband Communications) OLT backup.
+// DBC OLTs use a Cisco-style CLI similar to V-SOL/BDCOM; paging is
+// disabled with "terminal length 0".
+type dbcOS struct{}
+
+func (dbcOS) Name() string { return "dbc_os" }
+
+func (dbcOS) FetchConfig(ctx context.Context, s drivers.Session) ([]drivers.ConfigArtifact, error) {
+	_, _ = s.Run(ctx, "enable")
+	if _, err := s.Run(ctx, "terminal length 0"); err != nil {
+		return nil, fmt.Errorf("dbc_os: terminal length: %w", err)
+	}
+	running, err := s.Run(ctx, "show running-config")
+	if err != nil {
+		return nil, fmt.Errorf("dbc_os: show running-config: %w", err)
+	}
+	return []drivers.ConfigArtifact{
+		{Name: "running-config", Content: []byte(stripIOSChrome(running))},
+	}, nil
 }

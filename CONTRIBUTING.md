@@ -7,7 +7,7 @@ network configuration management and automation platform.
 
 Requirements:
 
-- Go 1.22 or newer
+- Go 1.25 or newer
 - `make`
 - (optional) `docker` for container builds
 

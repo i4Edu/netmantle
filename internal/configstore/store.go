@@ -31,7 +31,11 @@ import (
 type Store struct {
 	Root string
 
-	mu sync.Mutex // serialises commits across goroutines (per-process)
+	// keyMu guards keys; per-(tenant,device) mutexes live in keys so
+	// independent device backups can commit concurrently while each
+	// device's git repo is still serialised against itself.
+	keyMu sync.Mutex
+	keys  map[string]*sync.Mutex
 }
 
 // New constructs a Store. The root directory is created if missing.
@@ -42,7 +46,23 @@ func New(root string) (*Store, error) {
 	if err := os.MkdirAll(root, 0o750); err != nil {
 		return nil, fmt.Errorf("configstore: mkdir root: %w", err)
 	}
-	return &Store{Root: root}, nil
+	return &Store{Root: root, keys: map[string]*sync.Mutex{}}, nil
+}
+
+// repoLock returns the per-repo mutex, creating it lazily.
+func (s *Store) repoLock(tenantID, deviceID int64) *sync.Mutex {
+	key := strconv.FormatInt(tenantID, 10) + "/" + strconv.FormatInt(deviceID, 10)
+	s.keyMu.Lock()
+	defer s.keyMu.Unlock()
+	if s.keys == nil {
+		s.keys = map[string]*sync.Mutex{}
+	}
+	m, ok := s.keys[key]
+	if !ok {
+		m = &sync.Mutex{}
+		s.keys[key] = m
+	}
+	return m
 }
 
 // RepoPath returns the on-disk path of a device's git repository. The
@@ -79,8 +99,9 @@ func (s *Store) Commit(tenantID, deviceID int64, deviceName, author string, arti
 	if len(artifacts) == 0 {
 		return nil, errors.New("configstore: no artifacts")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	lk := s.repoLock(tenantID, deviceID)
+	lk.Lock()
+	defer lk.Unlock()
 
 	repoPath := filepath.Join(s.Root,
 		strconv.FormatInt(tenantID, 10),
