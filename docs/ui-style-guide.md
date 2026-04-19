@@ -76,10 +76,16 @@ prefer the scale over hand-rolled values to keep rhythms consistent.
 ## Radii, shadows, motion
 
 * `--radius-sm` (6 px) — inputs, badges, dense controls
-* `--radius-md` (8 px) — cards, modals
+* `--radius-md` (8 px) — cards, modals, the brand mark
 * `--radius-lg` (12 px) — overlay sheets, the sign-in card
+* `--radius-pill` (999 px) — sidebar nav items, top-bar action buttons,
+  status pills (anything where Metronic-style fully-rounded chrome reads
+  better than a square corner)
 * `--shadow-sm` — resting cards, the sticky top bar
 * `--shadow-md` — hovered cards, modals
+* `--shadow-accent` — coloured indigo glow used under the active sidebar
+  pill and the brand mark to give the accent a "lifted" feel without
+  importing any third-party CSS
 * `--transition-fast` (120 ms ease) — hover/focus feedback
 
 ## Components
@@ -106,9 +112,12 @@ The shared CSS recipes live in `app.css` and are consumed by name in
 * **Sidebar** is a deep slate panel (`--sidebar-bg`) holding the eight
   primary sections (Dashboard, Inventory, Backups, Compliance, Topology,
   Approvals, Audit, Settings). Each item is a small inline-SVG icon plus
-  a label; the active item is rendered as a filled accent pill. The
-  sidebar collapses to icons-only on screens narrower than 720 px and
-  exposes `data-collapsed='true'` for a future manual toggle.
+  a label rendered as a fully-rounded pill (`--radius-pill`); the active
+  item is filled with the indigo accent and lifted with the
+  `--shadow-accent` glow — the Metronic-style active state, implemented
+  in pure CSS. The sidebar collapses to icons-only on screens narrower
+  than 720 px (and via `data-collapsed='true'` for a future manual
+  toggle), in which case the pills tighten up to circular icon buttons.
 * **Content area** is rendered by `app.js` based on the URL hash
   (`#/inventory`, `#/audit`, …). Each view module is a single function
   that takes the root element and renders into it.

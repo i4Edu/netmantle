@@ -41,12 +41,12 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-sm);
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-md);
   background: linear-gradient(135deg, var(--accent), var(--accent-hover));
   color: var(--text-on-accent);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-accent);
 }
 .topbar h1 .brand-mark svg { width: 16px; height: 16px; }
 .topbar .spacer { flex: 1; }
@@ -56,7 +56,7 @@ body {
   background: transparent;
   border: 1px solid var(--border-default);
   padding: var(--space-1) var(--space-3);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-pill);
   cursor: pointer;
   text-decoration: none;
   font: inherit;
@@ -92,27 +92,28 @@ body {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-4);
   color: var(--sidebar-fg);
   text-decoration: none;
   font-size: var(--font-size-sm);
   font-weight: 500;
-  border-radius: var(--radius-sm);
-  transition: background var(--transition-fast), color var(--transition-fast);
+  border-radius: var(--radius-pill);
+  transition: background var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast);
 }
 .sidebar a:hover { background: var(--sidebar-active-bg); color: var(--sidebar-fg-active); }
 .sidebar a.active {
   background: var(--accent);
   color: var(--text-on-accent);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-accent);
 }
-.sidebar a.active svg { color: var(--text-on-accent); }
+.sidebar a.active svg { color: var(--text-on-accent); opacity: 1; }
 .sidebar a svg { width: 18px; height: 18px; flex-shrink: 0; opacity: 0.85; }
 .sidebar a .label { flex: 1; }
 
 /* When collapsed (toggled via [data-collapsed='true']), hide labels. */
 .sidebar[data-collapsed='true'] { width: 64px; }
 .sidebar[data-collapsed='true'] .label { display: none; }
+.sidebar[data-collapsed='true'] a { justify-content: center; padding: var(--space-2); }
 
 /* ---------- main content area ---------- */
 main {
@@ -347,6 +348,7 @@ pre.config {
 @media (max-width: 720px) {
   .sidebar { width: 56px; }
   .sidebar .label { display: none; }
+  .sidebar a { justify-content: center; padding: var(--space-2); }
   .inventory { grid-template-columns: 1fr; }
 }
 
