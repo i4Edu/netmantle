@@ -1,0 +1,143 @@
+/* NetMantle design tokens.
+ *
+ * The whole UI consumes these custom properties so the light/dark themes
+ * (and any future theme) can be swapped without touching component CSS.
+ *
+ * Every color is mapped to a semantic role rather than a literal hue so
+ * status colors (ok / warn / bad), surfaces and text remain consistent
+ * across pages. See docs/ui-style-guide.md for the rationale.
+ */
+
+:root, [data-theme='light'] {
+  /* surfaces */
+  --surface-page:    #f6f7f9;
+  --surface-card:    #ffffff;
+  --surface-sunken:  #eef1f4;
+  --surface-overlay: rgba(15, 23, 42, 0.5);
+
+  /* text */
+  --text-strong:    #0f172a;
+  --text-default:   #1c1f23;
+  --text-muted:     #5b6470;
+  --text-on-accent: #ffffff;
+
+  /* lines */
+  --border-default: #e3e7ec;
+  --border-strong:  #cdd5dd;
+
+  /* accent / brand */
+  --accent:         #2f6feb;
+  --accent-hover:   #2456c2;
+  --accent-soft:    #eef3fb;
+
+  /* status — used for badges, dots, borders */
+  --status-ok:      #1a7f37; /* compliant     / success */
+  --status-ok-soft: #e6f4ea;
+  --status-warn:    #b58900; /* drift         / running / pending */
+  --status-warn-soft:#fff4d6;
+  --status-bad:     #b00020; /* violation     / failed  / rejected */
+  --status-bad-soft:#fde7ea;
+  --status-info:    #2f6feb; /* informational / approved */
+  --status-info-soft:#eef3fb;
+
+  /* sidebar */
+  --sidebar-bg:        #102a43;
+  --sidebar-fg:        #cfd8e3;
+  --sidebar-fg-active: #ffffff;
+  --sidebar-active-bg: #1d3a5f;
+
+  /* typography scale */
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-size-xs:  0.75rem;
+  --font-size-sm:  0.85rem;
+  --font-size-md:  0.95rem;
+  --font-size-lg:  1.1rem;
+  --font-size-xl:  1.4rem;
+  --line-height:   1.45;
+
+  /* spacing scale (4px base) */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+
+  /* radius / shadow */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
+
+  /* motion */
+  --transition-fast: 120ms ease;
+}
+
+[data-theme='dark'] {
+  --surface-page:    #0e141b;
+  --surface-card:    #161d26;
+  --surface-sunken:  #1c242f;
+  --surface-overlay: rgba(0, 0, 0, 0.6);
+
+  --text-strong:    #f1f5f9;
+  --text-default:   #e2e8f0;
+  --text-muted:     #94a3b8;
+  --text-on-accent: #ffffff;
+
+  --border-default: #25303d;
+  --border-strong:  #34404f;
+
+  --accent:         #60a5fa;
+  --accent-hover:   #3b82f6;
+  --accent-soft:    #1f2a3a;
+
+  --status-ok:      #4ade80;
+  --status-ok-soft: #14321f;
+  --status-warn:    #facc15;
+  --status-warn-soft:#3a2e0b;
+  --status-bad:     #f87171;
+  --status-bad-soft:#3a161b;
+  --status-info:    #60a5fa;
+  --status-info-soft:#1f2a3a;
+
+  --sidebar-bg:        #0a141f;
+  --sidebar-fg:        #94a3b8;
+  --sidebar-fg-active: #ffffff;
+  --sidebar-active-bg: #1d3a5f;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+/* When OS prefers dark and no explicit override has been set, follow it. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+    --surface-page:    #0e141b;
+    --surface-card:    #161d26;
+    --surface-sunken:  #1c242f;
+    --surface-overlay: rgba(0, 0, 0, 0.6);
+    --text-strong:    #f1f5f9;
+    --text-default:   #e2e8f0;
+    --text-muted:     #94a3b8;
+    --border-default: #25303d;
+    --border-strong:  #34404f;
+    --accent:         #60a5fa;
+    --accent-hover:   #3b82f6;
+    --accent-soft:    #1f2a3a;
+    --status-ok:      #4ade80;
+    --status-ok-soft: #14321f;
+    --status-warn:    #facc15;
+    --status-warn-soft:#3a2e0b;
+    --status-bad:     #f87171;
+    --status-bad-soft:#3a161b;
+    --status-info:    #60a5fa;
+    --status-info-soft:#1f2a3a;
+    --sidebar-bg:        #0a141f;
+    --sidebar-fg:        #94a3b8;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  }
+}
