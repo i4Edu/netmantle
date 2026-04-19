@@ -49,8 +49,12 @@ type Channel struct {
 }
 
 // WebhookConfig is the JSON inside a webhook/slack channel row.
+// The URL is stored in url_envelope (sealed) when first saved; the
+// plaintext "url" field is removed before persistence. This closes
+// threat-model gap T10: webhook / Slack tokens are now envelope-encrypted.
 type WebhookConfig struct {
-	URL string `json:"url"`
+	URL         string `json:"url,omitempty"`
+	URLEnvelope string `json:"url_envelope,omitempty"`
 }
 
 // EmailConfig is the JSON inside an email channel row. Password is stored
@@ -94,9 +98,30 @@ func (s *Service) CreateChannel(ctx context.Context, tenantID int64, name, kind 
 	}
 	switch kind {
 	case "webhook", "slack":
-		var w WebhookConfig
-		if err := json.Unmarshal(cfg, &w); err != nil || w.URL == "" {
-			return Channel{}, errors.New("notify: webhook config requires url")
+		var raw map[string]any
+		if err := json.Unmarshal(cfg, &raw); err != nil {
+			return Channel{}, fmt.Errorf("notify: parse webhook config: %w", err)
+		}
+		// Accept either a plain "url" or an already-sealed "url_envelope".
+		// If a plaintext "url" is supplied, seal it and remove the field
+		// (closes threat-model gap T10).
+		if urlVal, ok := raw["url"].(string); ok && urlVal != "" {
+			env, err := s.Sealer.Seal([]byte(urlVal))
+			if err != nil {
+				return Channel{}, fmt.Errorf("notify: seal webhook url: %w", err)
+			}
+			raw["url_envelope"] = env
+			delete(raw, "url")
+			var merr error
+			cfg, merr = json.Marshal(raw)
+			if merr != nil {
+				return Channel{}, fmt.Errorf("notify: marshal webhook config: %w", merr)
+			}
+		}
+		// Validate that url_envelope is a non-empty string.
+		envStr, _ := raw["url_envelope"].(string)
+		if envStr == "" {
+			return Channel{}, errors.New("notify: webhook/slack config requires url")
 		}
 	case "email":
 		// Allow an optional plaintext "password" — seal it.
@@ -235,22 +260,22 @@ func (s *Service) Dispatch(ctx context.Context, tenantID int64, ev Event) {
 func (s *Service) sendOne(ctx context.Context, kind string, cfg []byte, ev Event) error {
 	switch kind {
 	case "webhook":
-		var w WebhookConfig
-		if err := json.Unmarshal(cfg, &w); err != nil {
+		url, err := s.unsealWebhookURL(cfg)
+		if err != nil {
 			return err
 		}
 		body, _ := json.Marshal(ev)
-		return s.postJSON(ctx, w.URL, body)
+		return s.postJSON(ctx, url, body)
 	case "slack":
-		var w WebhookConfig
-		if err := json.Unmarshal(cfg, &w); err != nil {
+		url, err := s.unsealWebhookURL(cfg)
+		if err != nil {
 			return err
 		}
 		payload := map[string]string{
 			"text": fmt.Sprintf("*%s*\n%s", ev.Subject, ev.Body),
 		}
 		body, _ := json.Marshal(payload)
-		return s.postJSON(ctx, w.URL, body)
+		return s.postJSON(ctx, url, body)
 	case "email":
 		var e EmailConfig
 		if err := json.Unmarshal(cfg, &e); err != nil {
@@ -260,6 +285,28 @@ func (s *Service) sendOne(ctx context.Context, kind string, cfg []byte, ev Event
 	default:
 		return fmt.Errorf("unknown kind %q", kind)
 	}
+}
+
+// unsealWebhookURL retrieves the URL from a webhook/slack channel config.
+// It supports both the legacy plaintext "url" field (for rows stored before
+// T10 sealing was introduced) and the new sealed "url_envelope" field.
+func (s *Service) unsealWebhookURL(cfg []byte) (string, error) {
+	var w WebhookConfig
+	if err := json.Unmarshal(cfg, &w); err != nil {
+		return "", fmt.Errorf("notify: parse webhook config: %w", err)
+	}
+	if w.URLEnvelope != "" {
+		pt, err := s.Sealer.Open(w.URLEnvelope)
+		if err != nil {
+			return "", fmt.Errorf("notify: unseal webhook url: %w", err)
+		}
+		return string(pt), nil
+	}
+	// Fallback: legacy rows have plaintext url.
+	if w.URL != "" {
+		return w.URL, nil
+	}
+	return "", errors.New("notify: no url configured for webhook channel")
 }
 
 func (s *Service) postJSON(ctx context.Context, url string, body []byte) error {

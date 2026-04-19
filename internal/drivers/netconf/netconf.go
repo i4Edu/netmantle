@@ -9,6 +9,7 @@
 package netconf
 
 import (
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -35,20 +36,72 @@ func GetConfigRPC(messageID int) string {
 ]]>]]>`, messageID)
 }
 
-// ParseRPCReply scans a NETCONF reply, returning the inner <data> element
-// content. Sufficient for unit testing the driver's parsing.
+// ParseRPCReply scans a NETCONF reply and returns the inner <data> element
+// content. It uses encoding/xml token parsing so it handles namespace-
+// qualified tags (e.g. <data xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">)
+// correctly, as required when talking to real RFC 6242-compliant devices.
 func ParseRPCReply(framed string) (string, error) {
 	// Strip the chunk delimiter "]]>]]>".
-	parts := strings.SplitN(framed, "]]>]]>", 2)
-	body := parts[0]
-	startTag := "<data>"
-	endTag := "</data>"
-	si := strings.Index(body, startTag)
-	ei := strings.Index(body, endTag)
-	if si < 0 || ei < 0 || ei < si {
-		return "", errors.New("netconf: <data> not found")
+	body := strings.SplitN(framed, "]]>]]>", 2)[0]
+
+	dec := xml.NewDecoder(strings.NewReader(body))
+	var depth int
+	var inData bool
+	var builder strings.Builder
+
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			// Tolerate partial/trailing content after the useful XML.
+			break
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if t.Name.Local == "data" {
+				inData = true
+				depth = 0
+			} else if inData {
+				depth++
+				// Reconstruct the opening tag, stripping namespace declarations.
+				// Go's encoding/xml represents namespace declarations as:
+				//   xmlns="uri"       → Attr{Name:{Space:"", Local:"xmlns"}, ...}
+				//   xmlns:prefix="uri"→ Attr{Name:{Space:"xmlns", Local:"prefix"}, ...}
+				// Both patterns are excluded below; all other attributes are kept.
+				builder.WriteString("<")
+				builder.WriteString(t.Name.Local)
+				for _, a := range t.Attr {
+					if a.Name.Space == "xmlns" || a.Name.Local == "xmlns" {
+						continue
+					}
+					fmt.Fprintf(&builder, " %s=%q", a.Name.Local, a.Value)
+				}
+				builder.WriteString(">")
+			}
+		case xml.EndElement:
+			if inData {
+				if t.Name.Local == "data" && depth == 0 {
+					// End of <data> element — we have everything.
+					return builder.String(), nil
+				}
+				depth--
+				builder.WriteString("</")
+				builder.WriteString(t.Name.Local)
+				builder.WriteString(">")
+			}
+		case xml.CharData:
+			if inData {
+				builder.Write(t)
+			}
+		}
 	}
-	return body[si+len(startTag) : ei], nil
+	if inData {
+		// We entered <data> but never saw the closing tag (truncated reply).
+		return builder.String(), nil
+	}
+	return "", errors.New("netconf: <data> not found in RPC reply")
 }
 
 // CopyDataElement is a tiny helper that reads from r, returning the first

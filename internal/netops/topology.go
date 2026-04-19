@@ -22,10 +22,21 @@ type Link struct {
 	BPort string `json:"b_port"`
 }
 
-// Graph is a deduplicated set of Links.
+// Graph is a deduplicated set of Links with stable versioning metadata.
+//
+// APIVersion is included so consumers can detect when the schema has
+// evolved. It follows semver; breaking changes bump the major component.
 type Graph struct {
-	Links []Link `json:"links"`
+	APIVersion string `json:"api_version"`
+	NodeCount  int    `json:"node_count"`
+	EdgeCount  int    `json:"edge_count"`
+	Links      []Link `json:"links"`
 }
+
+// currentAPIVersion is the graph schema version. Increment the major
+// component if the shape of Graph, Link, or the endpoint contract changes
+// in a breaking way.
+const currentAPIVersion = "1.0"
 
 var (
 	// "show lldp neighbors" / "show cdp neighbors" common output formats:
@@ -63,8 +74,10 @@ func FromNeighborOutput(localHost, output string) []Link {
 }
 
 // Merge combines per-device link lists, deduplicating undirected edges.
+// The returned Graph has APIVersion, NodeCount, and EdgeCount populated.
 func Merge(perDevice map[string][]Link) Graph {
 	seen := map[string]Link{}
+	nodes := map[string]struct{}{}
 	for _, links := range perDevice {
 		for _, l := range links {
 			a, b := l.A+"|"+l.APort, l.B+"|"+l.BPort
@@ -74,6 +87,8 @@ func Merge(perDevice map[string][]Link) Graph {
 				continue
 			}
 			seen[key] = l
+			nodes[l.A] = struct{}{}
+			nodes[l.B] = struct{}{}
 		}
 	}
 	out := make([]Link, 0, len(seen))
@@ -86,5 +101,10 @@ func Merge(perDevice map[string][]Link) Graph {
 		}
 		return out[i].APort < out[j].APort
 	})
-	return Graph{Links: out}
+	return Graph{
+		APIVersion: currentAPIVersion,
+		NodeCount:  len(nodes),
+		EdgeCount:  len(out),
+		Links:      out,
+	}
 }

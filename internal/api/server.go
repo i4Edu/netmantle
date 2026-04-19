@@ -148,6 +148,9 @@ func NewServer(d Deps) http.Handler {
 		mux.Handle("POST /api/v1/compliance/rules", s.auth(s.requireWrite(s.handleCreateComplianceRule)))
 		mux.Handle("DELETE /api/v1/compliance/rules/{id}", s.auth(s.requireWrite(s.handleDeleteComplianceRule)))
 		mux.Handle("GET /api/v1/compliance/findings", s.auth(s.handleListFindings))
+		// Rule packs: catalogue listing is read-only; applying a pack is operator+.
+		mux.Handle("GET /api/v1/compliance/rulepacks", s.auth(s.handleListRulePacks))
+		mux.Handle("POST /api/v1/compliance/rulepacks/{name}/apply", s.auth(s.requireWrite(s.handleApplyRulePack)))
 	}
 
 	// Phase 5 — discovery.

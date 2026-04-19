@@ -131,16 +131,47 @@ func runServe(argv []string) error {
 		return err
 	}
 
+	// Persistent SSH known-hosts store (closes threat-model gap T7).
+	// Tenant-scoped: each device's host key is pinned under the owning
+	// tenant's ID so cross-tenant key pollution is impossible.
+	knownHosts := transport.NewDBKnownHostsStore(db)
+
 	sessionFactory := func(ctx context.Context, d devices.Device, user, pw string) (drivers.Session, func() error, error) {
 		return transport.DialSSH(ctx, transport.SSHConfig{
-			Address: d.Address, Port: d.Port,
-			Username: user, Password: pw, Timeout: cfg.Backup.Timeout,
+			Address:    d.Address,
+			Port:       d.Port,
+			Username:   user,
+			Password:   pw,
+			Timeout:    cfg.Backup.Timeout,
+			KnownHosts: knownHosts,
+			TenantID:   d.TenantID,
 		})
 	}
+
+	// NETCONF factory used for cisco_netconf / junos_netconf devices.
+	// Routes through the dedicated SSH NETCONF subsystem (RFC 6242) rather
+	// than the interactive CLI shell used by CLI drivers.
+	netconfFactory := func(ctx context.Context, d devices.Device, user, pw string) (drivers.Session, func() error, error) {
+		sess, closer, err := transport.DialNetconf(ctx, transport.NetconfConfig{
+			Address:    d.Address,
+			Port:       d.Port,
+			Username:   user,
+			Password:   pw,
+			Timeout:    cfg.Backup.Timeout,
+			KnownHosts: knownHosts,
+			TenantID:   d.TenantID,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		return sess, closer, nil
+	}
+
 	auditSvc := audit.New(db, log)
 	bSvc := backup.New(devRepo, credRepo, store, db, log,
 		cfg.Backup.Timeout, cfg.Backup.Workers, sessionFactory)
 	bSvc.Audit = auditSvc
+	bSvc.NetconfSession = netconfFactory
 
 	// Phase 2..10 services.
 	chgSvc := changes.New(db, store, &diff.Engine{Rules: diff.DefaultRules()})
@@ -166,8 +197,13 @@ func runServe(argv []string) error {
 		var backend terminal.Backend
 		err = credRepo.Use(ctx, tenantID, *dev.CredentialID, func(user, pw string) error {
 			b, derr := transport.DialSSHShell(ctx, transport.SSHConfig{
-				Address: dev.Address, Port: dev.Port,
-				Username: user, Password: pw, Timeout: cfg.Backup.Timeout,
+				Address:    dev.Address,
+				Port:       dev.Port,
+				Username:   user,
+				Password:   pw,
+				Timeout:    cfg.Backup.Timeout,
+				KnownHosts: knownHosts,
+				TenantID:   tenantID,
 			})
 			if derr != nil {
 				return derr

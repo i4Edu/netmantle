@@ -28,9 +28,10 @@ func init() {
 	drivers.Register(&fortiosDriver{})
 	drivers.Register(&paloaltoPANOS{})
 	drivers.Register(&huaweiVRP{})
-	// Scaffolded transport stubs.
-	drivers.Register(&netconfStub{name: "cisco_netconf"})
-	drivers.Register(&netconfStub{name: "junos_netconf"})
+	// NETCONF drivers (hardened — requires NetconfSession factory in backup.Service).
+	drivers.Register(&ciscoNetconf{})
+	drivers.Register(&junosNetconf{})
+	// Scaffolded transport stubs (RESTCONF and gNMI still pending).
 	drivers.Register(&netconfStub{name: "restconf"})
 	drivers.Register(&netconfStub{name: "gnmi"})
 }
@@ -162,16 +163,61 @@ func (mikrotikROS) FetchConfig(ctx context.Context, s drivers.Session) ([]driver
 	}, nil
 }
 
-// netconfStub is a placeholder for the Phase 10 NETCONF/RESTCONF/gNMI
-// drivers. It registers under the requested name so devices can be
-// inventoried, and returns a clear "not implemented" error from
-// FetchConfig pointing operators at the roadmap.
+// netconfStub is a placeholder for the restconf and gnmi drivers.
+// cisco_netconf and junos_netconf are now hardened (see below).
 type netconfStub struct{ name string }
 
 func (n *netconfStub) Name() string { return n.name }
 
 func (n *netconfStub) FetchConfig(ctx context.Context, _ drivers.Session) ([]drivers.ConfigArtifact, error) {
-	return nil, fmt.Errorf("%s: NETCONF/RESTCONF/gNMI driver is scaffolded; backup wiring lands in a follow-up PR", n.name)
+	return nil, fmt.Errorf("%s: RESTCONF/gNMI driver is scaffolded; backup wiring lands in a follow-up PR", n.name)
+}
+
+// ciscoNetconf implements NETCONF-based backup for Cisco IOS-XE / NX-OS
+// devices that support RFC 6241 NETCONF. The backup service routes these
+// devices through transport.DialNetconf (SSH subsystem mode) which exposes
+// sess.Run("get-config:running"). The raw <data> XML is stored as the
+// "netconf-config" artifact.
+type ciscoNetconf struct{}
+
+func (ciscoNetconf) Name() string { return "cisco_netconf" }
+
+func (ciscoNetconf) FetchConfig(ctx context.Context, s drivers.Session) ([]drivers.ConfigArtifact, error) {
+	cfg, err := s.Run(ctx, "get-config:running")
+	if err != nil {
+		return nil, fmt.Errorf("cisco_netconf: get-config: %w", err)
+	}
+	if cfg == "" {
+		return nil, fmt.Errorf("cisco_netconf: empty config returned")
+	}
+	return []drivers.ConfigArtifact{
+		{Name: "netconf-config", Content: []byte(strings.TrimRight(cfg, "\n") + "\n")},
+	}, nil
+}
+
+// junosNetconf implements NETCONF-based backup for Juniper Junos devices.
+// Junos has native NETCONF support (RFC 6241) and exposes both the running
+// and candidate datastores; we capture both when available.
+type junosNetconf struct{}
+
+func (junosNetconf) Name() string { return "junos_netconf" }
+
+func (junosNetconf) FetchConfig(ctx context.Context, s drivers.Session) ([]drivers.ConfigArtifact, error) {
+	running, err := s.Run(ctx, "get-config:running")
+	if err != nil {
+		return nil, fmt.Errorf("junos_netconf: get-config running: %w", err)
+	}
+	arts := []drivers.ConfigArtifact{
+		{Name: "netconf-running", Content: []byte(strings.TrimRight(running, "\n") + "\n")},
+	}
+	// Candidate datastore is optional; not all Junos versions expose it
+	// over NETCONF in read mode. Ignore the error if unavailable.
+	if candidate, err := s.Run(ctx, "get-config:candidate"); err == nil && candidate != "" {
+		arts = append(arts, drivers.ConfigArtifact{
+			Name: "netconf-candidate", Content: []byte(strings.TrimRight(candidate, "\n") + "\n"),
+		})
+	}
+	return arts, nil
 }
 
 // ciscoNXOS implements Cisco Nexus (NX-OS) backup. NX-OS shares Cisco's

@@ -64,16 +64,17 @@ follow‑up work.
 | T4 | Stored credential exfiltration via DB read | Med / High | Envelope encryption (`internal/crypto`); plaintext never returned by API | Hardware‑backed KEK (HSM/KMS) |
 | T5 | KEK / master passphrase leak | Low / Critical | Sourced from env; never logged; never written to disk by NetMantle | First‑class rotation CLI; HSM‑backed KEK |
 | T6 | Session token forgery / interception | Low / High | HMAC‑signed session cookies; key configurable; cookie name configurable; cookie set with `HttpOnly` + `SameSite=Lax` in code; `Secure` set when the request reaches the app via TLS | Proxy‑aware `Secure` flag (set unconditionally when fronted by trusted TLS terminator) — see §6 |
-| T7 | SSH MITM during device backup | Med / High | Per‑device timeout; credential cleartext scoped to dial via `credRepo.Use(...)` | **Known‑hosts enforcement** — currently trust‑on‑first‑use |
+| T7 | SSH MITM during device backup | Med / High | Per-device timeout; credential cleartext scoped to dial via `credRepo.Use(...)`; **DB-backed known-hosts pinning** via `ssh_known_hosts` table (migration 0005) closes TOFU gap — key-changed attempts are rejected immediately | Hardware-backed key pinning; certificate-based SSH auth |
+
 | T8 | Plaintext configuration leak (git repos) | Med / High | Filesystem permissions on the data volume | Optional encrypted‑at‑rest repo storage |
 | T9 | GitOps mirror token leak | Low / Med | Envelope‑encrypted in `gitops_mirrors.secret_envelope` | Token rotation reminder / expiry warning |
-| T10 | Webhook / Slack token leak from `notification_channels.config` | Med / Med | SMTP password is sealed into `password_envelope`; webhook & Slack tokens are not yet sealed | Seal all sensitive notify channel fields by type |
+| T10 | Webhook / Slack token leak from `notification_channels.config` | Med / Med | **All webhook/Slack URL tokens are now sealed** into `url_envelope` using the same AES-256-GCM envelope encryption as SMTP passwords (closes T10); legacy rows with plaintext URL are still accepted at dispatch for backward compatibility | Migrate legacy rows on first dispatch; UI should indicate sealed status |
 | T11 | Bootstrap token capture from logs | Med / Med | Token is one‑time; logged at `WARN` only on first start; bcrypt hash stored, never plaintext | Out‑of‑band bootstrap token delivery |
 | T12 | Audit log tampering | Low / High | Append‑only writes via `internal/audit`; rows include actor + timestamp | Cryptographic chaining / external WORM sink |
 | T13 | Supply‑chain compromise of release artifacts | Low / Critical | Release workflow signs binaries with cosign keyless (OIDC); SPDX SBOM published per tag | Reproducible builds verification; signed Helm chart |
 | T14 | Dependency vulnerability | Med / Med | Go modules pinned; CI fails on `go mod tidy` drift | Automated dependency vulnerability scan in CI |
 | T15 | Denial of service via expensive backups | Low / Med | `backup.workers` cap; per‑device timeout | API‑level rate limiting; circuit breakers per device |
-| T16 | NETCONF/RESTCONF/gNMI scaffolded paths used in production | Med / High | Stubs return clear "not implemented" errors; `DRIVERS.md` lists them as scaffolded | Full implementation (roadmap Phase 10 follow‑up) |
+| T16 | NETCONF/RESTCONF/gNMI scaffolded paths used in production | Med / High | **NETCONF-over-SSH** now hardened for `cisco_netconf` and `junos_netconf` (uses SSH subsystem, not CLI shell); RESTCONF and gNMI stubs still return "scaffolded" error | Full RESTCONF/gNMI wiring (follow-up PR) |
 | T17 | Live push automation misuse | N/A today | Per‑driver `Apply()` is intentionally unimplemented; `internal/automation` returns "preview only" | Implement `Apply()` with explicit confirmation flow + dry‑run gate |
 
 ## 4. Authentication & authorisation

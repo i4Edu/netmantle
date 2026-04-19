@@ -33,6 +33,14 @@ type Service struct {
 	Timeout     time.Duration
 	NewSession  SessionFactory
 
+	// NetconfSession, when non-nil, is used for devices whose driver name
+	// exactly matches one of: "cisco_netconf", "junos_netconf", "restconf",
+	// or "gnmi". It receives the same (ctx, device, user, pass) arguments
+	// and must return a drivers.Session that understands NETCONF/RESTCONF/gNMI
+	// command semantics (e.g. "get-config:running").
+	// When nil, the NETCONF/RESTCONF/gNMI stub error is preserved.
+	NetconfSession SessionFactory
+
 	// Audit, when set, is used for all audit_log writes so the format
 	// stays consistent with the rest of the codebase (see internal/audit).
 	// When nil, audit writes are skipped (the run rows in backup_runs are
@@ -145,7 +153,14 @@ func (s *Service) BackupNow(ctx context.Context, tenantID, deviceID int64, actor
 
 	bctx, cancel := context.WithTimeout(ctx, s.Timeout)
 	defer cancel()
-	sess, closer, err := s.NewSession(bctx, dev, username, secret)
+
+	// Route NETCONF/RESTCONF/gNMI devices through the dedicated factory when
+	// one has been configured; otherwise fall back to the CLI session factory.
+	factory := s.NewSession
+	if s.NetconfSession != nil && isNetconfDriver(dev.Driver) {
+		factory = s.NetconfSession
+	}
+	sess, closer, err := factory(bctx, dev, username, secret)
 	if err != nil {
 		finalize("failed", "session: "+err.Error(), "")
 		return run, fmt.Errorf("backup: session: %w", err)
@@ -292,6 +307,16 @@ func nullIfEmpty(s string) any {
 		return nil
 	}
 	return s
+}
+
+// isNetconfDriver reports whether the named driver uses a NETCONF / RESTCONF /
+// gNMI session rather than a CLI shell session.
+func isNetconfDriver(name string) bool {
+	switch name {
+	case "cisco_netconf", "junos_netconf", "restconf", "gnmi":
+		return true
+	}
+	return false
 }
 
 // Compile-time assertion: Service is safe for concurrent BackupNow calls
