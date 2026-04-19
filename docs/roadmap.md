@@ -10,13 +10,13 @@ scope for follow-up hardening.
 | 1 | MVP backup | Inventory CRUD, SSH transport, builtin CLI drivers, git-backed config store, backup runs, embedded UI | Additional vendor coverage and transport hardening |
 | 2 | Change management & notifications | Diff engine, change events, webhook/Slack/email channels + rules | Policy tuning and richer routing/escalation controls |
 | 3 | Auditing & search | SQLite FTS5 search, saved searches, CSV export | Advanced indexing and large-scale search tuning |
-| 4 | Configuration compliance | Rules/rulesets/findings with transition notifications | Expanded rule packs and richer remediation workflows |
+| 4 | Configuration compliance | Rules/rulesets/findings with transition notifications, **ISP/Cisco/MikroTik baseline rule packs** | Broader rule pack library and richer remediation workflows |
 | 5 | Discovery & NMS sync | TCP/banner scan and NetBox JSON import | SNMP enrichment and LibreNMS/Zabbix synchronization |
 | 6 | Push/pull automation | Push-job CRUD, template rendering, preview, grouped results | Per-driver `Apply()` execution path (currently preview-only) |
-| 7 | In-app CLI & distributed pollers | Web terminal transcript/audit, poller registration + heartbeat | Full gRPC poller wire protocol and remote execution hardening |
+| 7 | In-app CLI & distributed pollers | Web terminal transcript/audit, poller registration + heartbeat, **poller job queue** (`poller_jobs` schema, idempotent enqueue/claim/complete/reclaim), **gRPC wire-protocol contract** (`.proto` + Go service interface) | Full gRPC server + mTLS + remote execution hardening |
 | 8 | Runtime state auditing & compliance | Probe framework and runtime checks | Broader probe library and policy packs |
-| 9 | Multi-tenancy & HA | Tenant CRUD, quotas, leader-elected scheduler, Helm chart | Automated HA/failover validation and scale testing |
-| 10 | Hardening + modern transports + topology + GitOps mirror | NETCONF helpers, RESTCONF/gNMI stubs, LLDP/CDP topology API + UI list view, GitOps mirror, signed release + SBOM workflow | Full NETCONF/RESTCONF/gNMI backup wiring, topology graph-canvas renderer, transport-level hardening |
+| 9 | Multi-tenancy & HA | Tenant CRUD, quotas, leader-elected scheduler, Helm chart, **extended HA failover tests** (split-brain prevention, leader handoff timeliness, rapid leadership-change stability) | Automated scale testing and HA chaos framework |
+| 10 | Hardening + modern transports + topology + GitOps mirror | NETCONF helpers, RESTCONF/gNMI stubs, LLDP/CDP topology API + UI canvas renderer, GitOps mirror, signed release + SBOM workflow, **NETCONF-over-SSH drivers hardened** (`cisco_netconf`, `junos_netconf`), **SSH known-hosts persistence** (closes threat-model T7), **webhook/Slack URL sealing** (closes T7+T10), **topology API versioning** (`api_version`, `node_count`, `edge_count`, `?limit=`) | Full RESTCONF/gNMI backup wiring, per-driver `Apply()`, gRPC poller wire-server |
 
 ## Immediate next actions
 
@@ -50,16 +50,20 @@ scope for follow-up hardening.
 
 ### Testing & CI/CD
 
-- Add automated HA/failover test scenarios (leader election, scheduler
-  handoff, tenant isolation under failover).
+- ~~Add automated HA/failover test scenarios (leader election, scheduler handoff, tenant isolation under failover)~~ — **shipped**: `TestSplitBrainPrevention`, `TestLeaderHandoffTimeliness`, `TestMultipleRapidLeaseFlips`, `TestLeaseContextCancellation` are now in `internal/scheduler/scheduler_test.go`.
 - Add integration tests for backup/diff/compliance end-to-end workflows.
 - Keep `release.yml` producing signed artifacts + SBOM on each tag and extend
   release verification checks as needed.
 
 ### Topology & UI
 
-- Treat Phase 10 topology support as **minimal API-first** (not production UI).
-- Build a topology visualization UI to improve operator/reviewer usability.
+- ~~Treat Phase 10 topology support as **minimal API-first** (not production UI)~~ — the topology canvas renderer is shipped. The API now returns `api_version`, `node_count`, `edge_count` fields (schema v1.0) and supports `?limit=`.
+- Remaining: harden the graph canvas for very large topologies (>500 nodes); add incremental layout.
+
+### Rule packs
+
+- ~~Compliance rule packs~~ — **shipped** in `internal/compliance/rulepacks/` with `isp-baseline`, `cisco-ios-cis`, `mikrotik-baseline`.
+- Remaining: Junos/Nokia/Huawei baseline packs; pack auto-update on version bump; UI picker.
 
 ### Community & contribution
 

@@ -14,6 +14,7 @@ import (
 	"github.com/i4Edu/netmantle/internal/automation"
 	"github.com/i4Edu/netmantle/internal/changes"
 	"github.com/i4Edu/netmantle/internal/compliance"
+	"github.com/i4Edu/netmantle/internal/compliance/rulepacks"
 	"github.com/i4Edu/netmantle/internal/discovery"
 	"github.com/i4Edu/netmantle/internal/netops"
 	"github.com/i4Edu/netmantle/internal/notify"
@@ -291,6 +292,58 @@ func (s *server) handleListFindings(w http.ResponseWriter, r *http.Request) {
 		out = []compliance.Finding{}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// handleListRulePacks returns the catalogue of built-in compliance rule packs.
+func (s *server) handleListRulePacks(w http.ResponseWriter, _ *http.Request) {
+	all := rulepacks.All()
+	type packMeta struct {
+		Name        string `json:"name"`
+		Version     string `json:"version"`
+		Description string `json:"description"`
+		RuleCount   int    `json:"rule_count"`
+	}
+	out := make([]packMeta, 0, len(all))
+	for _, p := range all {
+		out = append(out, packMeta{
+			Name: p.Name, Version: p.Version,
+			Description: p.Description, RuleCount: len(p.Rules),
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleApplyRulePack applies a named rule pack to the caller's tenant.
+// Rules are upserted by name, so the call is idempotent and safe to
+// re-apply after a pack version bump. Requires operator or admin role.
+func (s *server) handleApplyRulePack(w http.ResponseWriter, r *http.Request) {
+	u := userFromContext(r.Context())
+	packName := r.PathValue("name")
+	pack, ok := rulepacks.Get(packName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "compliance: rule pack not found: "+packName)
+		return
+	}
+
+	var applied []compliance.Rule
+	for _, tmpl := range pack.Rules {
+		tmpl.TenantID = u.TenantID
+		rule, err := s.Compliance.UpsertRule(r.Context(), tmpl)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		applied = append(applied, rule)
+	}
+	if applied == nil {
+		applied = []compliance.Rule{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"pack":    pack.Name,
+		"version": pack.Version,
+		"applied": len(applied),
+		"rules":   applied,
+	})
 }
 
 // ============================================================
@@ -617,16 +670,27 @@ func (s *server) handleTopology(w http.ResponseWriter, r *http.Request) {
 	// per device. If no such probe results exist, return an empty graph.
 	db, ok := s.DB.(*sql.DB)
 	if !ok {
-		writeJSON(w, http.StatusOK, netops.Graph{})
+		writeJSON(w, http.StatusOK, netops.Graph{APIVersion: "1.0", Links: []netops.Link{}})
 		return
 	}
+
+	// Optional ?limit= cap on how many devices contribute to the graph.
+	// Defaults to 500 to prevent unbounded queries on large tenants.
+	limit := 500
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 10000 {
+			limit = n
+		}
+	}
+
 	rows, err := db.QueryContext(r.Context(), `
         SELECT d.hostname, pr.output
         FROM probe_runs pr
         JOIN probes p ON p.id = pr.probe_id
         JOIN devices d ON d.id = pr.device_id
         WHERE p.tenant_id = ? AND p.name = 'neighbors'
-        ORDER BY pr.created_at DESC`, u.TenantID)
+        ORDER BY pr.created_at DESC
+        LIMIT ?`, u.TenantID, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -643,7 +707,11 @@ func (s *server) handleTopology(w http.ResponseWriter, r *http.Request) {
 		}
 		per[host] = netops.FromNeighborOutput(host, output)
 	}
-	writeJSON(w, http.StatusOK, netops.Merge(per))
+	g := netops.Merge(per)
+	if g.Links == nil {
+		g.Links = []netops.Link{}
+	}
+	writeJSON(w, http.StatusOK, g)
 }
 
 func (s *server) handleGetMirror(w http.ResponseWriter, r *http.Request) {

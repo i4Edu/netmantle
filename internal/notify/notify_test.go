@@ -94,3 +94,65 @@ func TestRejectBadKind(t *testing.T) {
 		t.Fatal("expected rejection")
 	}
 }
+
+// TestWebhookURLIsSealed verifies threat-model gap T10:
+// webhook / Slack URLs must be stored as sealed envelopes, never plaintext.
+func TestWebhookURLIsSealed(t *testing.T) {
+	svc, tid := newSvc(t)
+	const rawURL = "https://hooks.example.com/secret-token"
+
+	for _, kind := range []string{"webhook", "slack"} {
+		cfg, _ := json.Marshal(map[string]string{"url": rawURL})
+		ch, err := svc.CreateChannel(context.Background(), tid, "test-"+kind, kind, cfg)
+		if err != nil {
+			t.Fatalf("%s CreateChannel: %v", kind, err)
+		}
+
+		var stored map[string]any
+		_ = json.Unmarshal(ch.Config, &stored)
+
+		// Plaintext "url" must not be present in stored config.
+		if u, ok := stored["url"].(string); ok && u != "" {
+			t.Errorf("%s: plaintext url leaked into stored config: %s", kind, u)
+		}
+		// Sealed "url_envelope" must be present.
+		env, _ := stored["url_envelope"].(string)
+		if env == "" {
+			t.Fatalf("%s: url_envelope missing from stored config", kind)
+		}
+		// The envelope must decrypt to the original URL.
+		pt, err := svc.Sealer.Open(env)
+		if err != nil {
+			t.Fatalf("%s: unseal url_envelope: %v", kind, err)
+		}
+		if string(pt) != rawURL {
+			t.Fatalf("%s: decrypted url = %q, want %q", kind, pt, rawURL)
+		}
+	}
+}
+
+// TestWebhookURLEnvelopeRoundTrips verifies that dispatch correctly unseals
+// the stored URL and can reach the test HTTP server.
+func TestWebhookURLEnvelopeRoundTrips(t *testing.T) {
+	svc, tid := newSvc(t)
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg, _ := json.Marshal(map[string]string{"url": srv.URL})
+	ch, err := svc.CreateChannel(context.Background(), tid, "sealed-wh", "webhook", cfg)
+	if err != nil {
+		t.Fatalf("CreateChannel: %v", err)
+	}
+	if err := svc.CreateRule(context.Background(), tid, "r1", "ping", ch.ID); err != nil {
+		t.Fatalf("CreateRule: %v", err)
+	}
+
+	svc.Dispatch(context.Background(), tid, Event{Kind: "ping", Subject: "s", Body: "b", Timestamp: time.Now()})
+	if n := atomic.LoadInt32(&hits); n != 1 {
+		t.Fatalf("expected 1 hit, got %d — sealed URL may not be decrypted correctly", n)
+	}
+}

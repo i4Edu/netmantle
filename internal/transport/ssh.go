@@ -24,11 +24,19 @@ type SSHConfig struct {
 	Port     int    // used if Address has no port
 	Username string
 	Password string
-	// HostKeyCallback. If nil, host keys are accepted on first use within
-	// the lifetime of the process (in-memory TOFU). A persistent
-	// known_hosts store will land in a follow-up.
+	// HostKeyCallback overrides the default known-hosts behaviour when set.
+	// If nil, KnownHosts is consulted instead; if both are nil, keys are
+	// accepted and pinned in an in-process MemKnownHostsStore (TOFU).
 	HostKeyCallback ssh.HostKeyCallback
-	Timeout         time.Duration
+	// KnownHosts is the persistent store used for SSH host-key pinning.
+	// Prefer this over HostKeyCallback — it persists across process
+	// restarts (closing threat-model gap T7). When nil, a temporary
+	// MemKnownHostsStore is created for the lifetime of the dial call.
+	KnownHosts KnownHostsStore
+	// TenantID scopes the KnownHosts lookup so different tenants cannot
+	// see each other's pinned keys.
+	TenantID int64
+	Timeout  time.Duration
 }
 
 // DialSSH opens an interactive SSH session and returns a drivers.Session
@@ -51,10 +59,7 @@ func DialSSH(ctx context.Context, cfg SSHConfig) (drivers.Session, func() error,
 		addr = net.JoinHostPort(addr, strconv.Itoa(port))
 	}
 
-	hk := cfg.HostKeyCallback
-	if hk == nil {
-		hk = tofuHostKey()
-	}
+	hk := resolveHostKeyCallback(ctx, cfg)
 	clientCfg := &ssh.ClientConfig{
 		User:            cfg.Username,
 		Auth:            []ssh.AuthMethod{ssh.Password(cfg.Password)},
@@ -155,10 +160,7 @@ func DialSSHShell(ctx context.Context, cfg SSHConfig) (io.ReadWriteCloser, error
 		}
 		addr = net.JoinHostPort(addr, strconv.Itoa(port))
 	}
-	hk := cfg.HostKeyCallback
-	if hk == nil {
-		hk = tofuHostKey()
-	}
+	hk := resolveHostKeyCallback(ctx, cfg)
 	clientCfg := &ssh.ClientConfig{
 		User:            cfg.Username,
 		Auth:            []ssh.AuthMethod{ssh.Password(cfg.Password)},
@@ -309,23 +311,22 @@ func cleanCommandEcho(raw, cmd string) string {
 	return out
 }
 
-// tofuHostKey returns a callback that accepts and pins host keys on first
-// use, in memory only. This is acceptable for Phase 1 lab use; a persistent
-// known_hosts file lands in a follow-up. The callback is concurrency-safe.
-func tofuHostKey() ssh.HostKeyCallback {
-	var mu sync.Mutex
-	pinned := map[string][]byte{}
-	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
-		mu.Lock()
-		defer mu.Unlock()
-		k := key.Marshal()
-		if existing, ok := pinned[hostname]; ok {
-			if !bytes.Equal(existing, k) {
-				return fmt.Errorf("transport/ssh: host key changed for %s", hostname)
-			}
-			return nil
-		}
-		pinned[hostname] = k
-		return nil
+// resolveHostKeyCallback returns the ssh.HostKeyCallback to use for a dial.
+// Priority:
+//  1. cfg.HostKeyCallback (explicit override, e.g. tests)
+//  2. cfg.KnownHosts (persistent DB-backed store — preferred for production)
+//  3. Temporary MemKnownHostsStore (TOFU, keys forgotten on process exit)
+func resolveHostKeyCallback(ctx context.Context, cfg SSHConfig) ssh.HostKeyCallback {
+	if cfg.HostKeyCallback != nil {
+		return cfg.HostKeyCallback
 	}
+	store := cfg.KnownHosts
+	if store == nil {
+		store = NewMemKnownHostsStore()
+	}
+	port := cfg.Port
+	if port == 0 {
+		port = 22
+	}
+	return knownHostsCallback(ctx, cfg.TenantID, port, store)
 }

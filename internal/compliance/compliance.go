@@ -68,6 +68,39 @@ func (s *Service) CreateRule(ctx context.Context, r Rule) (Rule, error) {
 	return r, nil
 }
 
+// UpsertRule inserts a rule or updates the kind/pattern/severity/description
+// of an existing rule with the same (tenant_id, name). Callers use this when
+// applying rule packs so re-applying a pack after a version bump is safe.
+func (s *Service) UpsertRule(ctx context.Context, r Rule) (Rule, error) {
+	if err := validateRule(r); err != nil {
+		return Rule{}, err
+	}
+	r.Severity = defaultSeverity(r.Severity)
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.DB.ExecContext(ctx, `
+        INSERT INTO compliance_rules(tenant_id, name, kind, pattern, severity, description, created_at)
+        VALUES(?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT DO UPDATE SET
+            kind = excluded.kind,
+            pattern = excluded.pattern,
+            severity = excluded.severity,
+            description = excluded.description`,
+		r.TenantID, r.Name, r.Kind, r.Pattern, r.Severity, r.Description, now)
+	if err != nil {
+		return Rule{}, err
+	}
+	// Fetch back the upserted row to return the canonical ID.
+	var id int64
+	err = s.DB.QueryRowContext(ctx,
+		`SELECT id FROM compliance_rules WHERE tenant_id=? AND name=?`,
+		r.TenantID, r.Name).Scan(&id)
+	if err != nil {
+		return Rule{}, err
+	}
+	r.ID = id
+	return r, nil
+}
+
 // ListRules returns all rules for a tenant.
 func (s *Service) ListRules(ctx context.Context, tenantID int64) ([]Rule, error) {
 	rows, err := s.DB.QueryContext(ctx,

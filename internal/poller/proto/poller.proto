@@ -1,0 +1,191 @@
+// poller.proto — NetMantle distributed poller wire protocol.
+//
+// This file is the authoritative contract between the NetMantle core
+// (server) and remote poller agents (clients).
+//
+// Protocol design notes
+// ---------------------
+//
+// 1. Transport security: all connections MUST use mTLS. The core presents
+//    a server certificate; the poller presents its bootstrap client
+//    certificate (provisioned during registration via the REST API).
+//    Plain-text connections are rejected at the TLS handshake.
+//
+// 2. Authentication: the poller sends its bootstrap token in the
+//    "authorization" gRPC metadata header as "Bearer <token>". The core
+//    verifies the token against the bcrypt hash stored in the `pollers`
+//    table (same hash as the REST heartbeat path). Replay protection is
+//    provided by a timestamp + nonce in AuthenticateRequest.
+//
+// 3. Tenant scoping: every RPC carries tenant_id either explicitly or
+//    implicitly via the authenticated poller record. The server never
+//    returns cross-tenant data regardless of the request.
+//
+// 4. Job queue semantics: jobs move through states
+//    queued → claimed → running → done|failed|cancelled.
+//    The ClaimJob RPC is atomic; at-most-one poller wins any given job.
+//    Pollers acknowledge completion via ReportResult. A job whose
+//    claimed_at is older than the deadline is reclaimed by the scheduler.
+//
+// 5. Versioning: all messages carry a proto3 schema. The service URL uses
+//    "/netmantle.poller.v1/" so future breaking changes get a new version
+//    path without breaking deployed v1 pollers.
+//
+// Code generation
+// ---------------
+//   # Install toolchain once:
+//   go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+//   go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+//
+//   # Regenerate:
+//   buf generate
+//   # or:
+//   protoc --go_out=. --go-grpc_out=. internal/poller/proto/poller.proto
+//
+// Generated files go to internal/poller/pollerv1/ and are committed.
+// Do not hand-edit generated files.
+
+syntax = "proto3";
+
+package netmantle.poller.v1;
+
+option go_package = "github.com/i4Edu/netmantle/internal/poller/pollerv1";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+
+// PollerService is the gRPC service exposed by the NetMantle core for
+// remote poller agents to connect to. All RPCs require mTLS and a valid
+// bearer token (see AuthenticateRequest).
+service PollerService {
+  // Authenticate exchanges a bootstrap token for a session lease. The
+  // lease is short-lived; pollers must call Authenticate periodically
+  // (heartbeat). Returns the poller record and a refresh deadline.
+  rpc Authenticate(AuthenticateRequest) returns (AuthenticateResponse);
+
+  // ClaimJob atomically dequeues the next available job for this poller's
+  // zone. Returns a single job or NOT_FOUND if the queue is empty.
+  rpc ClaimJob(ClaimJobRequest) returns (ClaimJobResponse);
+
+  // ReportResult submits the outcome of a claimed job. The server
+  // transitions the job to done or failed and triggers any PostCommit
+  // hooks (diff, compliance, search index, notifications).
+  rpc ReportResult(ReportResultRequest) returns (ReportResultResponse);
+
+  // StreamJobs is a server-push stream: the core notifies the poller of
+  // newly enqueued jobs in real time so pollers do not need to poll.
+  // The client sends a single StreamJobsRequest and receives zero or more
+  // JobAvailable messages until the stream is cancelled.
+  rpc StreamJobs(StreamJobsRequest) returns (stream JobAvailable);
+
+  // Health returns the poller's current health state and the last-seen
+  // timestamp as observed by the core.
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+// --------------------------------------------------------------------
+// Authentication
+// --------------------------------------------------------------------
+
+message AuthenticateRequest {
+  string   poller_name = 1; // the name used at REST registration
+  int64    tenant_id   = 2;
+  // Replay-prevention: the core rejects requests older than 60 seconds.
+  google.protobuf.Timestamp client_time = 3;
+  string   nonce       = 4; // random hex, min 16 bytes
+}
+
+message AuthenticateResponse {
+  Poller   poller         = 1;
+  // The poller should refresh its session before refresh_before expires.
+  google.protobuf.Timestamp refresh_before = 2;
+}
+
+message Poller {
+  int64  id         = 1;
+  int64  tenant_id  = 2;
+  string zone       = 3;
+  string name       = 4;
+  google.protobuf.Timestamp last_seen = 5;
+}
+
+// --------------------------------------------------------------------
+// Job queue
+// --------------------------------------------------------------------
+
+message ClaimJobRequest {
+  int64  poller_id  = 1;
+  int64  tenant_id  = 2;
+  // Capability filter: the poller only claims jobs of these types.
+  repeated string supported_job_types = 3;
+}
+
+message ClaimJobResponse {
+  Job job = 1; // absent if queue is empty
+}
+
+message Job {
+  int64  id               = 1;
+  int64  tenant_id        = 2;
+  string idempotency_key  = 3;
+  int64  device_id        = 4;
+  string job_type         = 5; // "backup" | "probe" | "custom"
+  string payload_json     = 6; // JSON job parameters
+  google.protobuf.Timestamp created_at  = 7;
+  google.protobuf.Timestamp expires_at  = 8;
+  // Maximum time the poller may take to report a result before the core
+  // reclaims the job and makes it available again.
+  google.protobuf.Duration  deadline    = 9;
+}
+
+message ReportResultRequest {
+  int64  job_id       = 1;
+  int64  poller_id    = 2;
+  int64  tenant_id    = 3;
+  bool   success      = 4;
+  string result_json  = 5; // JSON result payload (job-type specific)
+  string error        = 6; // populated when success=false
+  // For backup jobs: the artifact bytes.
+  repeated Artifact artifacts = 7;
+}
+
+message Artifact {
+  string name    = 1;
+  bytes  content = 2;
+}
+
+message ReportResultResponse {
+  bool accepted = 1;
+}
+
+// --------------------------------------------------------------------
+// Streaming
+// --------------------------------------------------------------------
+
+message StreamJobsRequest {
+  int64  poller_id  = 1;
+  int64  tenant_id  = 2;
+  repeated string supported_job_types = 3;
+}
+
+// JobAvailable is a hint that a job matching the poller's filters is
+// now in the queue. The poller should call ClaimJob immediately.
+message JobAvailable {
+  string job_type   = 1;
+  string zone       = 2;
+}
+
+// --------------------------------------------------------------------
+// Health
+// --------------------------------------------------------------------
+
+message HealthRequest {
+  int64 poller_id = 1;
+  int64 tenant_id = 2;
+}
+
+message HealthResponse {
+  bool   healthy         = 1;
+  string status_message  = 2;
+  google.protobuf.Timestamp core_observed_last_seen = 3;
+}

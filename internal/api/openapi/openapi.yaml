@@ -336,6 +336,55 @@ paths:
     get:
       summary: List current compliance findings
       responses: {'200': {description: OK, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/ComplianceFinding'}}}}}}
+  /compliance/rulepacks:
+    get:
+      summary: List available built-in compliance rule packs
+      description: Returns the catalogue of versioned ISP/vendor baseline rule packs that can be applied to a tenant.
+      x-stability: stable
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    name:        {type: string}
+                    version:     {type: string}
+                    description: {type: string}
+                    rule_count:  {type: integer}
+  /compliance/rulepacks/{name}/apply:
+    post:
+      summary: Apply a named rule pack to the caller's tenant
+      description: |
+        Upserts all rules from the named pack into the tenant's compliance
+        rule set. The operation is idempotent — re-applying a pack after a
+        version bump updates changed rules without creating duplicates.
+        Requires operator or admin role.
+      x-stability: stable
+      parameters:
+        - in: path
+          name: name
+          required: true
+          schema: {type: string}
+          description: Rule pack name (e.g. "isp-baseline", "cisco-ios-cis", "mikrotik-baseline")
+      responses:
+        '200':
+          description: OK — rules applied
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pack:    {type: string}
+                  version: {type: string}
+                  applied: {type: integer}
+                  rules:
+                    type: array
+                    items: {$ref: '#/components/schemas/ComplianceRule'}
+        '404': {description: Rule pack not found}
 
   # -------------------------------------------------------------------------
   # Phase 5 — discovery
@@ -440,8 +489,23 @@ paths:
   # -------------------------------------------------------------------------
   /topology:
     get:
-      summary: LLDP/CDP topology graph (API-first; visualization UI is a follow-up)
-      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/TopologyGraph'}}}}}
+      summary: LLDP/CDP topology graph with stable schema versioning
+      description: |
+        Returns the deduplicated topology graph built from LLDP/CDP probe runs.
+        The `api_version` field (currently "1.0") allows consumers to detect
+        schema evolution. Use `?limit=N` to cap how many devices contribute
+        to the graph (default 500, max 10000).
+      parameters:
+        - in: query
+          name: limit
+          schema: {type: integer, default: 500}
+          description: Maximum number of contributing devices
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TopologyGraph'}
   /gitops/mirror:
     get:
       summary: Get GitOps mirror config
@@ -725,22 +789,30 @@ components:
         port: {type: integer, default: 22}
     TopologyGraph:
       type: object
+      description: |
+        Deduplicated LLDP/CDP topology graph. The `api_version` field enables
+        consumers to detect schema evolution. Breaking schema changes will
+        increment the major component (e.g. "2.0").
       properties:
-        nodes:
+        api_version:
+          type: string
+          description: Graph schema version ("1.0" currently)
+          example: "1.0"
+        node_count:
+          type: integer
+          description: Number of distinct hostnames in the graph
+        edge_count:
+          type: integer
+          description: Number of deduplicated links
+        links:
           type: array
           items:
             type: object
             properties:
-              id: {type: string}
-        edges:
-          type: array
-          items:
-            type: object
-            properties:
-              source: {type: string}
-              target: {type: string}
-              local_port: {type: string}
-              remote_port: {type: string}
+              a:      {type: string, description: Hostname of side A}
+              a_port: {type: string, description: Interface on side A}
+              b:      {type: string, description: Hostname of side B}
+              b_port: {type: string, description: Interface on side B}
 
     ChangeRequestInput:
       type: object
