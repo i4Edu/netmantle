@@ -124,6 +124,9 @@ subsequent requests.
 - [Architecture](docs/architecture.md) and the ADRs under [docs/adr/](docs/adr)
 - [Roadmap](docs/roadmap.md) — what shipped vs. what is still scaffolded
 - [Driver SDK](docs/driver-sdk.md)
+- [Reviewer architecture summary](ARCHITECTURE.md)
+- [Driver maturity matrix](DRIVERS.md)
+- [Security policy](SECURITY.md)
 
 ## Development
 
