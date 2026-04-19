@@ -123,9 +123,10 @@ func (s *Service) BackupNow(ctx context.Context, tenantID, deviceID int64, actor
 			s.Logger.Warn("update backup_run failed", "err", uerr, "run_id", runID)
 		}
 		_, _ = s.DB.ExecContext(context.Background(),
-			`INSERT INTO audit_log(tenant_id, action, target, detail, created_at) VALUES(?, ?, ?, ?, ?)`,
+			`INSERT INTO audit_log(tenant_id, action, target, detail, source, created_at) VALUES(?, ?, ?, ?, ?, ?)`,
 			tenantID, "device.backup", fmt.Sprintf("device:%d", dev.ID),
 			fmt.Sprintf("status=%s actor=%s sha=%s err=%s", status, actor, sha, errMsg),
+			"backup",
 			now.Format(time.RFC3339))
 	}
 

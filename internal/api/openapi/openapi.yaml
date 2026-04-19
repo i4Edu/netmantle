@@ -171,6 +171,33 @@ paths:
           description: Driver names
           content: {application/json: {schema: {type: array, items: {type: string}}}}
 
+  /audit:
+    get:
+      summary: List audit log entries (most recent first)
+      description: |
+        Returns audit_log entries scoped to the caller's tenant. Every
+        mutating handler writes here (device.create / device.update /
+        device.delete / credential.create / credential.delete /
+        device.backup.request / device.backup / device_group.create) so
+        the same endpoint feeds the reviewer-facing Audit page and any
+        external SIEM integration.
+      x-stability: experimental
+      parameters:
+        - {in: query, name: user,   schema: {type: integer, format: int64}, description: Actor user id (exact)}
+        - {in: query, name: action, schema: {type: string},                description: 'Action key, exact (e.g. device.create)'}
+        - {in: query, name: target, schema: {type: string},                description: 'Substring match on target (e.g. device:42)'}
+        - {in: query, name: since,  schema: {type: string, format: date-time}, description: RFC3339 lower bound (inclusive)}
+        - {in: query, name: until,  schema: {type: string, format: date-time}, description: RFC3339 upper bound (inclusive)}
+        - {in: query, name: limit,  schema: {type: integer, default: 100, maximum: 500}}
+        - {in: query, name: offset, schema: {type: integer, default: 0,   minimum: 0}}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: '#/components/schemas/AuditEntry'}}
+        '400': {description: Invalid filter value}
+
   # -------------------------------------------------------------------------
   # Phase 2 — change events & notifications
   # -------------------------------------------------------------------------
@@ -469,6 +496,17 @@ components:
         status: {type: string, enum: [running, success, failed]}
         error: {type: string, nullable: true}
         commit_sha: {type: string, nullable: true}
+    AuditEntry:
+      type: object
+      properties:
+        id: {type: integer, format: int64}
+        tenant_id: {type: integer, format: int64, nullable: true}
+        actor_user_id: {type: integer, format: int64, nullable: true}
+        action: {type: string, example: device.create}
+        target: {type: string, example: 'device:42'}
+        detail: {type: string}
+        source: {type: string, enum: [ui, api, scheduler, poller, system, backup]}
+        created_at: {type: string, format: date-time}
     ChangeEvent:
       type: object
       properties:

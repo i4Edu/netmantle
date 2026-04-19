@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/i4Edu/netmantle/internal/api"
+	"github.com/i4Edu/netmantle/internal/audit"
 	"github.com/i4Edu/netmantle/internal/auth"
 	"github.com/i4Edu/netmantle/internal/automation"
 	"github.com/i4Edu/netmantle/internal/backup"
@@ -205,9 +206,10 @@ func runServe(argv []string) error {
 	}
 
 	metrics := observability.New()
+	auditSvc := audit.New(db, log)
 	handler := api.NewServer(api.Deps{
 		Auth: authSvc, Devices: devRepo, Credentials: credRepo,
-		Backup: bSvc, Logger: log, Metrics: metrics,
+		Backup: bSvc, Logger: log, Metrics: metrics, Audit: auditSvc,
 		Changes: chgSvc, Notify: notifySvc, Search: searchSvc,
 		Compliance: complianceSvc, Discovery: discoverySvc,
 		Automation: automationSvc, Probes: probesSvc,

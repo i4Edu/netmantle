@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/i4Edu/netmantle/internal/audit"
 	"github.com/i4Edu/netmantle/internal/auth"
 	"github.com/i4Edu/netmantle/internal/backup"
 	"github.com/i4Edu/netmantle/internal/configstore"
@@ -60,6 +61,7 @@ func newTestServer(t *testing.T) (*httptest.Server, string) {
 		Auth: authSvc, Devices: devRepo, Credentials: credRepo,
 		Backup: bSvc, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Metrics: observability.New(),
+		Audit:   audit.New(db, slog.New(slog.NewTextHandler(io.Discard, nil))),
 	})
 	return httptest.NewServer(h), pw
 }
