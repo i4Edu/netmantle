@@ -61,8 +61,9 @@ type Job struct {
 
 // Runner runs a set of Jobs while holding a single named Lease.
 type Runner struct {
-	Lease *Lease
-	Jobs  []Job
+	Lease        *Lease
+	Jobs         []Job
+	TickInterval time.Duration // defaults to 1s when zero
 }
 
 // Start blocks until ctx is cancelled. While the lease is held, jobs are
@@ -71,8 +72,12 @@ func (r *Runner) Start(ctx context.Context, log func(string, ...any)) {
 	if log == nil {
 		log = func(string, ...any) {}
 	}
+	tickInterval := r.TickInterval
+	if tickInterval <= 0 {
+		tickInterval = time.Second
+	}
 	last := make(map[string]time.Time, len(r.Jobs))
-	tick := time.NewTicker(time.Second)
+	tick := time.NewTicker(tickInterval)
 	defer tick.Stop()
 	for {
 		select {

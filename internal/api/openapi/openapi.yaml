@@ -6,6 +6,17 @@ info:
     REST API for the NetMantle network configuration management platform.
     All endpoints are prefixed with `/api/v1`. Authentication is via the
     `netmantle_session` cookie obtained from `POST /auth/login`.
+
+    ## Stability policy (pre-v1)
+
+    Endpoints marked `x-stability: frozen` have stable request/response
+    contracts as of this version. Breaking changes to these endpoints require
+    a new major API version. All other endpoints may evolve until the first
+    stable tag.
+
+    Storage schema changes follow the same policy: migration files are
+    append-only. Any schema evolution must include compatibility notes and
+    rollback expectations in the same PR.
 servers:
   - url: /api/v1
 security:
@@ -14,6 +25,7 @@ paths:
   /auth/login:
     post:
       summary: Log in
+      x-stability: frozen
       security: []
       requestBody:
         required: true
@@ -26,11 +38,13 @@ paths:
   /auth/logout:
     post:
       summary: Log out the current session
+      x-stability: frozen
       responses:
         '204': {description: Logged out}
   /auth/me:
     get:
       summary: Return the authenticated user
+      x-stability: frozen
       responses:
         '200':
           description: The current user
@@ -38,12 +52,14 @@ paths:
   /devices:
     get:
       summary: List devices
+      x-stability: frozen
       responses:
         '200':
           description: Devices
           content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Device'}}}}
     post:
       summary: Create a device
+      x-stability: frozen
       requestBody:
         required: true
         content: {application/json: {schema: {$ref: '#/components/schemas/DeviceInput'}}}
@@ -54,12 +70,14 @@ paths:
   /devices/{id}:
     get:
       summary: Get a device
+      x-stability: frozen
       parameters: [{$ref: '#/components/parameters/Id'}]
       responses:
         '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Device'}}}}
         '404': {description: Not found}
     put:
       summary: Update a device
+      x-stability: frozen
       parameters: [{$ref: '#/components/parameters/Id'}]
       requestBody:
         required: true
@@ -68,12 +86,14 @@ paths:
         '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Device'}}}}
     delete:
       summary: Delete a device
+      x-stability: frozen
       parameters: [{$ref: '#/components/parameters/Id'}]
       responses:
         '204': {description: Deleted}
   /devices/{id}/backup:
     post:
       summary: Trigger a backup of a device
+      x-stability: frozen
       parameters: [{$ref: '#/components/parameters/Id'}]
       responses:
         '200':
@@ -82,6 +102,7 @@ paths:
   /devices/{id}/runs:
     get:
       summary: List recent backup runs for a device
+      x-stability: frozen
       parameters: [{$ref: '#/components/parameters/Id'}]
       responses:
         '200':
@@ -90,6 +111,7 @@ paths:
   /devices/{id}/config:
     get:
       summary: Get the latest stored configuration for a device
+      x-stability: frozen
       parameters:
         - {$ref: '#/components/parameters/Id'}
         - {in: query, name: artifact, schema: {type: string, default: running-config}}
@@ -100,12 +122,14 @@ paths:
   /device-groups:
     get:
       summary: List device groups
+      x-stability: frozen
       responses:
         '200':
           description: Groups
           content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Group'}}}}
     post:
       summary: Create a device group
+      x-stability: frozen
       requestBody:
         required: true
         content: {application/json: {schema: {$ref: '#/components/schemas/GroupInput'}}}
@@ -116,12 +140,14 @@ paths:
   /credentials:
     get:
       summary: List credentials (metadata only — secrets never leave the server)
+      x-stability: frozen
       responses:
         '200':
           description: Credentials
           content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Credential'}}}}
     post:
       summary: Create a credential
+      x-stability: frozen
       requestBody:
         required: true
         content: {application/json: {schema: {$ref: '#/components/schemas/CredentialInput'}}}
@@ -132,16 +158,235 @@ paths:
   /credentials/{id}:
     delete:
       summary: Delete a credential
+      x-stability: frozen
       parameters: [{$ref: '#/components/parameters/Id'}]
       responses:
         '204': {description: Deleted}
   /drivers:
     get:
       summary: List built-in drivers
+      x-stability: frozen
       responses:
         '200':
           description: Driver names
           content: {application/json: {schema: {type: array, items: {type: string}}}}
+
+  # -------------------------------------------------------------------------
+  # Phase 2 — change events & notifications
+  # -------------------------------------------------------------------------
+  /changes:
+    get:
+      summary: List ChangeEvents (most recent first)
+      x-stability: frozen
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: '#/components/schemas/ChangeEvent'}}
+  /changes/{id}/diff:
+    get:
+      summary: Get unified diff for a ChangeEvent
+      x-stability: frozen
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses:
+        '200':
+          description: Unified diff as plain text
+          content: {text/plain: {schema: {type: string}}}
+        '404': {description: Event not found or not in caller's tenant}
+  /changes/{id}/review:
+    post:
+      summary: Mark a ChangeEvent as reviewed
+      x-stability: frozen
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses:
+        '204': {description: Marked reviewed}
+  /notifications/channels:
+    get:
+      summary: List notification channels
+      x-stability: frozen
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/NotificationChannel'}}}}}}
+    post:
+      summary: Create notification channel
+      x-stability: frozen
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/NotificationChannelInput'}}}
+      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/NotificationChannel'}}}}}
+  /notifications/channels/{id}:
+    delete:
+      summary: Delete a notification channel
+      x-stability: frozen
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses: {'204': {description: Deleted}}
+  /notifications/rules:
+    get:
+      summary: List notification rules
+      x-stability: frozen
+      responses: {'200': {description: OK}}
+    post:
+      summary: Create notification rule
+      x-stability: frozen
+      responses: {'201': {description: Created}}
+
+  # -------------------------------------------------------------------------
+  # Phase 3 — search & export
+  # -------------------------------------------------------------------------
+  /search:
+    get:
+      summary: Full-text search across stored configs
+      parameters:
+        - {name: q, in: query, required: true, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, default: 50}}
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/SearchHit'}}}}}}
+  /search/saved:
+    get:
+      summary: List saved searches
+      responses: {'200': {description: OK}}
+    post:
+      summary: Save a search
+      responses: {'201': {description: Created}}
+  /changes.csv:
+    get:
+      summary: Export changes as CSV
+      responses: {'200': {description: text/csv}}
+
+  # -------------------------------------------------------------------------
+  # Phase 4 — compliance
+  # -------------------------------------------------------------------------
+  /compliance/rules:
+    get:
+      summary: List compliance rules
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/ComplianceRule'}}}}}}
+    post:
+      summary: Create a compliance rule
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/ComplianceRuleInput'}}}
+      responses: {'201': {description: Created, content: {application/json: {schema: {$ref: '#/components/schemas/ComplianceRule'}}}}}
+  /compliance/rules/{id}:
+    delete:
+      summary: Delete a compliance rule
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses: {'204': {description: Deleted}}
+  /compliance/findings:
+    get:
+      summary: List current compliance findings
+      responses: {'200': {description: OK, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/ComplianceFinding'}}}}}}
+
+  # -------------------------------------------------------------------------
+  # Phase 5 — discovery
+  # -------------------------------------------------------------------------
+  /discovery/scans:
+    post:
+      summary: Start a discovery scan
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/ScanInput'}}}
+      responses: {'200': {description: OK}}
+  /discovery/import/netbox:
+    post:
+      summary: Import devices from a NetBox JSON dump
+      responses: {'200': {description: OK}}
+
+  # -------------------------------------------------------------------------
+  # Phase 6 — push automation
+  # -------------------------------------------------------------------------
+  /push/jobs:
+    get:
+      summary: List push jobs
+      responses: {'200': {description: OK}}
+    post:
+      summary: Create a push job
+      responses: {'201': {description: Created}}
+  /push/jobs/{id}/preview:
+    post:
+      summary: Preview rendered config per device
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses: {'200': {description: OK}}
+  /push/jobs/{id}/run:
+    post:
+      summary: Execute a push job (applies rendered config to each targeted device)
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses: {'200': {description: OK}}
+
+  # -------------------------------------------------------------------------
+  # Phase 7 — pollers + terminal
+  # -------------------------------------------------------------------------
+  /pollers:
+    get:
+      summary: List remote pollers
+      responses: {'200': {description: OK}}
+    post:
+      summary: Register a remote poller
+      description: |
+        Returns a one-time bootstrap token in the response body. Store this
+        token immediately — it will not be shown again. The token is used by
+        the poller agent to authenticate its heartbeat calls.
+      responses: {'201': {description: Created}}
+  /pollers/{id}:
+    delete:
+      summary: Delete a remote poller
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses: {'204': {description: Deleted}}
+  /devices/{id}/terminal:
+    get:
+      summary: WebSocket upgrade to an in-app device terminal
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses: {'101': {description: Switching Protocols}}
+
+  # -------------------------------------------------------------------------
+  # Phase 8 — probes
+  # -------------------------------------------------------------------------
+  /probes:
+    get:
+      summary: List probes
+      responses: {'200': {description: OK}}
+    post:
+      summary: Create a probe
+      responses: {'201': {description: Created}}
+  /probes/{id}:
+    delete:
+      summary: Delete a probe
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses: {'204': {description: Deleted}}
+  /probes/{id}/runs:
+    get:
+      summary: List recent probe runs
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses: {'200': {description: OK}}
+
+  # -------------------------------------------------------------------------
+  # Phase 9 — tenants & quotas
+  # -------------------------------------------------------------------------
+  /tenants:
+    get:
+      summary: List tenants (admin only)
+      responses: {'200': {description: OK}}
+    post:
+      summary: Create tenant (admin only)
+      responses: {'201': {description: Created}}
+  /tenants/{id}/quota:
+    put:
+      summary: Set per-tenant device quota (admin only)
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      responses: {'204': {description: No Content}}
+
+  # -------------------------------------------------------------------------
+  # Phase 10 — topology + GitOps mirror
+  # -------------------------------------------------------------------------
+  /topology:
+    get:
+      summary: LLDP/CDP topology graph (API-first; visualization UI is a follow-up)
+      responses: {'200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/TopologyGraph'}}}}}
+  /gitops/mirror:
+    get:
+      summary: Get GitOps mirror config
+      responses: {'200': {description: OK}}
+    put:
+      summary: Configure GitOps mirror (admin only)
+      responses: {'204': {description: No Content}}
+
 components:
   securitySchemes:
     cookieAuth:
@@ -224,91 +469,86 @@ components:
         status: {type: string, enum: [running, success, failed]}
         error: {type: string, nullable: true}
         commit_sha: {type: string, nullable: true}
+    ChangeEvent:
+      type: object
+      properties:
+        id: {type: integer, format: int64}
+        device_id: {type: integer, format: int64}
+        artifact: {type: string, example: running-config}
+        old_sha: {type: string, nullable: true}
+        new_sha: {type: string}
+        added_lines: {type: integer}
+        removed_lines: {type: integer}
+        reviewed: {type: boolean}
+        created_at: {type: string, format: date-time}
+    NotificationChannelInput:
+      type: object
+      required: [name, kind, config]
+      properties:
+        name: {type: string}
+        kind: {type: string, enum: [webhook, slack, email]}
+        config: {type: object, description: 'Channel-specific configuration (URL, token, etc.). For email channels, if a plaintext "password" field is provided it is automatically moved to "password_envelope" (envelope-encrypted); the plaintext field is not stored. For webhook and slack channels, all fields (including any URL tokens) are stored as provided — treat the database file as a secret.'}
+    NotificationChannel:
+      allOf:
+        - {$ref: '#/components/schemas/NotificationChannelInput'}
+        - type: object
+          properties:
+            id: {type: integer, format: int64}
+            tenant_id: {type: integer, format: int64}
+            created_at: {type: string, format: date-time}
+    SearchHit:
+      type: object
+      properties:
+        device_id: {type: integer, format: int64}
+        artifact: {type: string}
+        commit_sha: {type: string}
+        snippet: {type: string, description: Matching excerpt from the stored config}
+    ComplianceRuleInput:
+      type: object
+      required: [name, kind, pattern]
+      properties:
+        name: {type: string}
+        kind: {type: string, enum: [regex, must_include, must_exclude, ordered_block]}
+        pattern: {type: string, description: 'Regex, literal string, or JSON array of lines for ordered_block'}
+        severity: {type: string, enum: [low, medium, high, critical], default: medium}
+        description: {type: string}
+    ComplianceRule:
+      allOf:
+        - {$ref: '#/components/schemas/ComplianceRuleInput'}
+        - type: object
+          properties:
+            id: {type: integer, format: int64}
+            tenant_id: {type: integer, format: int64}
+            created_at: {type: string, format: date-time}
+    ComplianceFinding:
+      type: object
+      properties:
+        device_id: {type: integer, format: int64}
+        rule_id: {type: integer, format: int64}
+        status: {type: string, enum: [pass, fail]}
+        detail: {type: string, nullable: true}
+    ScanInput:
+      type: object
+      required: [cidr]
+      properties:
+        cidr: {type: string, example: '10.0.0.0/24'}
+        port: {type: integer, default: 22}
+    TopologyGraph:
+      type: object
+      properties:
+        nodes:
+          type: array
+          items:
+            type: object
+            properties:
+              id: {type: string}
+        edges:
+          type: array
+          items:
+            type: object
+            properties:
+              source: {type: string}
+              target: {type: string}
+              local_port: {type: string}
+              remote_port: {type: string}
 
-# -------------------------------------------------------------------------
-# Phase 2..10 endpoints. Path-only sketch — full schemas live in code.
-# Auto-generation of this section from the handlers is a follow-up.
-# -------------------------------------------------------------------------
-  /api/v1/changes:
-    get: { summary: List ChangeEvents, security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
-  /api/v1/changes/{id}/diff:
-    get:
-      summary: Get unified diff for a ChangeEvent
-      security: [{cookieAuth: []}]
-      parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
-      responses: {'200': {description: text/plain diff}}
-  /api/v1/notifications/channels:
-    get: { summary: List notification channels, security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
-    post: { summary: Create notification channel, security: [{cookieAuth: []}], responses: {'201': {description: Created}} }
-  /api/v1/notifications/rules:
-    get: { summary: List notification rules, security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
-    post: { summary: Create notification rule, security: [{cookieAuth: []}], responses: {'201': {description: Created}} }
-  /api/v1/search:
-    get:
-      summary: Full-text search across stored configs
-      security: [{cookieAuth: []}]
-      parameters:
-        - {name: q, in: query, required: true, schema: {type: string}}
-        - {name: limit, in: query, schema: {type: integer}}
-      responses: {'200': {description: OK}}
-  /api/v1/search/saved:
-    get: { summary: List saved searches, security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
-    post: { summary: Save a search, security: [{cookieAuth: []}], responses: {'201': {description: Created}} }
-  /api/v1/changes.csv:
-    get: { summary: Export changes as CSV, security: [{cookieAuth: []}], responses: {'200': {description: text/csv}} }
-  /api/v1/compliance/rules:
-    get: { summary: List compliance rules, security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
-    post: { summary: Create a compliance rule, security: [{cookieAuth: []}], responses: {'201': {description: Created}} }
-  /api/v1/compliance/findings:
-    get: { summary: List current compliance findings, security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
-  /api/v1/discovery/scans:
-    post: { summary: Start a discovery scan, security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
-  /api/v1/discovery/import/netbox:
-    post: { summary: Import devices from a NetBox JSON dump, security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
-  /api/v1/push/jobs:
-    get: { summary: List push jobs, security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
-    post: { summary: Create a push job, security: [{cookieAuth: []}], responses: {'201': {description: Created}} }
-  /api/v1/push/jobs/{id}/preview:
-    post:
-      summary: Preview rendered config per device
-      security: [{cookieAuth: []}]
-      parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
-      responses: {'200': {description: OK}}
-  /api/v1/push/jobs/{id}/run:
-    post:
-      summary: Execute a push job (preview-only in this MVP — see roadmap)
-      security: [{cookieAuth: []}]
-      parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
-      responses: {'200': {description: OK}}
-  /api/v1/pollers:
-    get: { summary: List remote pollers, security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
-    post: { summary: Register a remote poller, security: [{cookieAuth: []}], responses: {'201': {description: Created}} }
-  /api/v1/devices/{id}/terminal:
-    get:
-      summary: WebSocket upgrade to an in-app device terminal
-      security: [{cookieAuth: []}]
-      parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
-      responses: {'101': {description: Switching Protocols}}
-  /api/v1/probes:
-    get: { summary: List probes, security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
-    post: { summary: Create a probe, security: [{cookieAuth: []}], responses: {'201': {description: Created}} }
-  /api/v1/probes/{id}/runs:
-    get:
-      summary: List recent probe runs
-      security: [{cookieAuth: []}]
-      parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
-      responses: {'200': {description: OK}}
-  /api/v1/tenants:
-    get: { summary: List tenants (admin), security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
-    post: { summary: Create tenant (admin), security: [{cookieAuth: []}], responses: {'201': {description: Created}} }
-  /api/v1/tenants/{id}/quota:
-    put:
-      summary: Set per-tenant device quota (admin)
-      security: [{cookieAuth: []}]
-      parameters: [{name: id, in: path, required: true, schema: {type: integer}}]
-      responses: {'204': {description: No Content}}
-  /api/v1/topology:
-    get: { summary: LLDP/CDP topology graph, security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
-  /api/v1/gitops/mirror:
-    get: { summary: Get GitOps mirror config, security: [{cookieAuth: []}], responses: {'200': {description: OK}} }
-    put: { summary: Configure GitOps mirror (admin), security: [{cookieAuth: []}], responses: {'204': {description: No Content}} }
