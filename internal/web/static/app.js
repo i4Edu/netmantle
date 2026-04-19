@@ -5,8 +5,10 @@
 //   2. theme handling (light/dark + manual override in localStorage)
 //   3. session refresh
 //   4. router that maps #/<route> to a render function in `views`
-//   5. per-view modules (inventory keeps the original behavior, audit is new,
-//      everything else is a placeholder ready for follow-up PRs)
+//   5. per-view modules: Inventory, Backups (changes + diff), Compliance
+//      (rules + findings), Topology (LLDP/CDP nodes & links), Approvals
+//      (change-request queue), Audit (filtered log), Settings (tenants,
+//      tokens, channels, rules, pollers).
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -396,25 +398,370 @@ function renderAuditRows(root, rows) {
   root.appendChild(table);
 }
 
-// ---------- placeholders for follow-up PRs ----------
-const placeholder = (title, note) => (root) => {
-  root.appendChild(el('h2', {}, title));
-  root.appendChild(el('div', { class: 'placeholder' },
-    el('h2', {}, title + ' is coming soon'),
-    el('p', {}, note),
-  ));
+// ---------- shared helpers ----------
+function emptyState(message) {
+  return el('div', { class: 'card' }, el('p', { class: 'muted' }, message));
+}
+function errorState(message) {
+  return el('div', { class: 'card' }, el('p', { class: 'error' }, message));
+}
+function statusBadgeClass(status) {
+  switch (status) {
+    case 'pass':
+    case 'success':
+    case 'approved':
+    case 'applied':
+      return 'ok';
+    case 'fail':
+    case 'failed':
+    case 'rejected':
+    case 'cancelled':
+      return 'bad';
+    case 'running':
+    case 'submitted':
+    case 'pending':
+      return 'warn';
+    default:
+      return 'info';
+  }
+}
+
+// ---------- Backups (recent change events with diff viewer) ----------
+views.backups = async (root) => {
+  root.appendChild(el('h2', {}, 'Backups & changes'));
+  const layout = el('div', { class: 'inventory' });
+  const left = el('aside', { class: 'list-pane' },
+    el('h2', {}, 'Recent changes'),
+    el('ul', { id: 'changes-list' }));
+  const right = el('article', { id: 'change-detail' },
+    el('p', { class: 'muted' }, 'Select a change on the left to view its diff.'));
+  layout.append(left, right);
+  root.appendChild(layout);
+
+  let rows;
+  try { rows = await api('GET', '/changes'); }
+  catch (e) { left.appendChild(errorState('Error: ' + e.message)); return; }
+
+  const ul = $('#changes-list');
+  ul.innerHTML = '';
+  if (!rows.length) {
+    ul.appendChild(el('li', { class: 'muted' },
+      'No changes recorded yet — run a backup that produces a different config.'));
+    return;
+  }
+  for (const c of rows) {
+    const summary = `device ${c.device_id} • ${c.artifact} • +${c.added_lines}/-${c.removed_lines}`;
+    const li = el('li', { 'data-id': c.id }, summary);
+    li.onclick = () => showChange(c);
+    ul.appendChild(li);
+  }
 };
 
-views.backups    = placeholder('Backups',
-  'A Git-style diff viewer with one-click rollback ships in PR #4.');
-views.compliance = placeholder('Compliance',
-  'Rule packs with pass/fail counts and expandable findings ship in a follow-up PR.');
-views.topology   = placeholder('Topology',
-  'A graph canvas of LLDP/CDP links ships in PR #6. The /api/v1/topology endpoint already returns the data.');
-views.approvals  = placeholder('Approvals',
-  'The approval workflow + Approvals queue ship in PR #3.');
-views.settings   = placeholder('Settings',
-  'Tenant + integration token management ships in PR #7.');
+async function showChange(c) {
+  const detail = $('#change-detail');
+  if (!detail) return;
+  for (const li of $$('#changes-list li')) {
+    li.classList.toggle('active', Number(li.dataset.id) === c.id);
+  }
+  detail.innerHTML = '';
+  detail.appendChild(el('h2', {}, `Change #${c.id}`));
+  detail.appendChild(el('p', { class: 'muted' },
+    `${c.artifact} • device ${c.device_id} • ` +
+    `${new Date(c.created_at).toLocaleString()} • ` +
+    `+${c.added_lines}/-${c.removed_lines}`));
+  if (!c.reviewed) {
+    const btn = el('button', { class: 'btn' }, 'Mark reviewed');
+    btn.onclick = async () => {
+      try { await api('POST', `/changes/${c.id}/review`); btn.disabled = true; btn.textContent = 'Reviewed'; }
+      catch (e) { alert('Failed: ' + e.message); }
+    };
+    detail.appendChild(el('div', { class: 'actions' }, btn));
+  } else {
+    detail.appendChild(el('span', { class: 'badge ok' }, 'reviewed'));
+  }
+  detail.appendChild(el('h3', {}, 'Diff'));
+  try {
+    const d = await api('GET', `/changes/${c.id}/diff`);
+    detail.appendChild(el('pre', { class: 'config' }, d || '(no diff)'));
+  } catch (e) {
+    detail.appendChild(el('p', { class: 'error' }, 'Could not load diff: ' + e.message));
+  }
+}
+
+// ---------- Compliance (rules + findings) ----------
+views.compliance = async (root) => {
+  root.appendChild(el('h2', {}, 'Compliance'));
+
+  // Add-rule form
+  const form = el('form', { id: 'add-rule-form' },
+    el('label', {}, 'Name ', el('input', { name: 'name', required: true })),
+    el('label', {}, 'Kind ',
+      el('select', { name: 'kind' },
+        el('option', { value: 'must_include' }, 'must_include'),
+        el('option', { value: 'must_exclude' }, 'must_exclude'),
+        el('option', { value: 'regex' }, 'regex'),
+        el('option', { value: 'ordered_block' }, 'ordered_block'))),
+    el('label', {}, 'Pattern ', el('input', { name: 'pattern', required: true })),
+    el('label', {}, 'Severity ',
+      el('select', { name: 'severity' },
+        el('option', { value: 'low' }, 'low'),
+        el('option', { value: 'medium', selected: true }, 'medium'),
+        el('option', { value: 'high' }, 'high'),
+        el('option', { value: 'critical' }, 'critical'))),
+    el('button', { type: 'submit' }, 'Add rule'),
+  );
+  const rulesCard = el('div', { class: 'card' },
+    el('h3', {}, 'Rules'),
+    el('details', {}, el('summary', {}, 'Add rule'), form),
+    el('div', { id: 'rules-table' }, el('p', { class: 'muted' }, 'Loading…')));
+  const findingsCard = el('div', { class: 'card' },
+    el('h3', {}, 'Findings'),
+    el('div', { id: 'findings-table' }, el('p', { class: 'muted' }, 'Loading…')));
+  root.append(rulesCard, findingsCard);
+
+  const renderRules = async () => {
+    const dst = $('#rules-table');
+    if (!dst) return;
+    let rules;
+    try { rules = await api('GET', '/compliance/rules'); }
+    catch (e) { dst.innerHTML = ''; dst.appendChild(el('p', { class: 'error' }, 'Error: ' + e.message)); return; }
+    dst.innerHTML = '';
+    if (!rules.length) { dst.appendChild(el('p', { class: 'muted' }, 'No rules defined yet.')); return; }
+    const t = el('table', { class: 'data' });
+    t.innerHTML = '<thead><tr><th>ID</th><th>Name</th><th>Kind</th><th>Pattern</th><th>Severity</th><th></th></tr></thead>';
+    const tb = el('tbody');
+    for (const r of rules) {
+      const del = el('button', { class: 'btn ghost' }, 'Delete');
+      del.onclick = async () => {
+        if (!confirm('Delete rule ' + r.name + '?')) return;
+        try { await api('DELETE', `/compliance/rules/${r.id}`); renderRules(); }
+        catch (e) { alert('Failed: ' + e.message); }
+      };
+      tb.appendChild(el('tr', {},
+        el('td', {}, String(r.id)),
+        el('td', {}, r.name),
+        el('td', {}, el('code', {}, r.kind)),
+        el('td', {}, el('code', {}, r.pattern)),
+        el('td', {}, el('span', { class: 'badge ' + (r.severity === 'high' || r.severity === 'critical' ? 'bad' : 'info') }, r.severity)),
+        el('td', {}, del),
+      ));
+    }
+    t.appendChild(tb);
+    dst.appendChild(t);
+  };
+
+  const renderFindings = async () => {
+    const dst = $('#findings-table');
+    if (!dst) return;
+    let findings, rules;
+    try {
+      [findings, rules] = await Promise.all([
+        api('GET', '/compliance/findings'),
+        api('GET', '/compliance/rules'),
+      ]);
+    } catch (e) { dst.innerHTML = ''; dst.appendChild(el('p', { class: 'error' }, 'Error: ' + e.message)); return; }
+    dst.innerHTML = '';
+    if (!findings.length) { dst.appendChild(el('p', { class: 'muted' }, 'No findings yet — back up a device with rules defined.')); return; }
+    const ruleByID = new Map((rules || []).map((r) => [r.id, r]));
+    const sevOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+    const groups = new Map();
+    for (const f of findings) {
+      const rule = ruleByID.get(f.rule_id);
+      const sev = (rule && rule.severity) || 'unknown';
+      if (!groups.has(sev)) groups.set(sev, []);
+      groups.get(sev).push({ ...f, _rule: rule });
+    }
+    const sevs = Array.from(groups.keys()).sort(
+      (a, b) => (sevOrder[a] ?? 99) - (sevOrder[b] ?? 99));
+    for (const sev of sevs) {
+      const group = groups.get(sev);
+      dst.appendChild(el('h4', { class: 'finding-group' },
+        el('span', { class: 'badge ' + statusBadgeClass(sev === 'critical' || sev === 'high' ? 'fail' : (sev === 'low' ? 'pass' : 'pending')) }, sev),
+        ' ', String(group.length) + (group.length === 1 ? ' finding' : ' findings')));
+      const t = el('table', { class: 'data' });
+      t.innerHTML = '<thead><tr><th>Device</th><th>Rule</th><th>Status</th><th>Detail</th></tr></thead>';
+      const tb = el('tbody');
+      for (const f of group) {
+        const ruleLabel = f._rule ? `${f._rule.name} (#${f.rule_id})` : '#' + f.rule_id;
+        tb.appendChild(el('tr', {},
+          el('td', {}, '#' + f.device_id),
+          el('td', {}, ruleLabel),
+          el('td', {}, el('span', { class: 'badge ' + statusBadgeClass(f.status) }, f.status)),
+          el('td', {}, f.detail || ''),
+        ));
+      }
+      t.appendChild(tb);
+      dst.appendChild(t);
+    }
+  };
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    try {
+      await api('POST', '/compliance/rules', {
+        name: fd.get('name'), kind: fd.get('kind'),
+        pattern: fd.get('pattern'), severity: fd.get('severity'),
+      });
+      form.reset();
+      renderRules();
+    } catch (err) { alert('Failed: ' + err.message); }
+  });
+
+  await renderRules();
+  await renderFindings();
+};
+
+// ---------- Topology (LLDP/CDP node + link tables) ----------
+views.topology = async (root) => {
+  root.appendChild(el('h2', {}, 'Topology'));
+  root.appendChild(el('p', { class: 'muted' },
+    'Discovered links from LLDP/CDP neighbour reports. A graph canvas renderer is tracked as Phase 11+ work.'));
+  let data;
+  try { data = await api('GET', '/topology'); }
+  catch (e) { root.appendChild(errorState('Error: ' + e.message)); return; }
+  const links = (data && data.links) || [];
+  if (!links.length) {
+    root.appendChild(emptyState('No topology links recorded yet.'));
+    return;
+  }
+  // Derive node set
+  const nodes = new Set();
+  for (const l of links) { nodes.add(l.a); nodes.add(l.b); }
+
+  const nodesCard = el('div', { class: 'card' },
+    el('h3', {}, `Nodes (${nodes.size})`));
+  const nodeList = el('ul');
+  for (const n of [...nodes].sort()) nodeList.appendChild(el('li', {}, n));
+  nodesCard.appendChild(nodeList);
+
+  const linksCard = el('div', { class: 'card' },
+    el('h3', {}, `Links (${links.length})`));
+  const t = el('table', { class: 'data' });
+  t.innerHTML = '<thead><tr><th>A</th><th>A port</th><th>B</th><th>B port</th></tr></thead>';
+  const tb = el('tbody');
+  for (const l of links) {
+    tb.appendChild(el('tr', {},
+      el('td', {}, l.a), el('td', {}, el('code', {}, l.a_port)),
+      el('td', {}, l.b), el('td', {}, el('code', {}, l.b_port)),
+    ));
+  }
+  t.appendChild(tb);
+  linksCard.appendChild(t);
+  root.append(nodesCard, linksCard);
+};
+
+// ---------- Approvals (change-request queue) ----------
+views.approvals = async (root) => {
+  root.appendChild(el('h2', {}, 'Approvals'));
+  let rows;
+  try { rows = await api('GET', '/change-requests'); }
+  catch (e) { root.appendChild(errorState('Error: ' + e.message)); return; }
+  if (!rows.length) {
+    root.appendChild(emptyState('No change requests yet.'));
+    return;
+  }
+  const card = el('div', { class: 'card' });
+  const t = el('table', { class: 'data' });
+  t.innerHTML = '<thead><tr><th>ID</th><th>Title</th><th>Kind</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>';
+  const tb = el('tbody');
+  const reload = () => router();
+  for (const r of rows) {
+    const actions = el('span', { class: 'actions' });
+    const mkBtn = (label, cls, op, prompt) => {
+      const b = el('button', { class: 'btn ' + cls }, label);
+      b.onclick = async () => {
+        const body = {};
+        if (prompt) {
+          const reason = window.prompt(prompt + ' (optional)');
+          if (reason === null) return;          // user aborted the prompt
+          if (reason !== '') body.reason = reason;
+        }
+        try { await api('POST', `/change-requests/${r.id}/${op}`, prompt ? body : undefined); reload(); }
+        catch (e) { alert('Failed: ' + e.message); }
+      };
+      return b;
+    };
+    if (r.status === 'draft')      actions.append(mkBtn('Submit', '', 'submit'));
+    if (r.status === 'submitted')  actions.append(mkBtn('Approve', '', 'approve', 'Approval note'),
+                                                  mkBtn('Reject', 'danger', 'reject', 'Rejection reason'));
+    if (r.status === 'approved')   actions.append(mkBtn('Apply', '', 'apply'));
+    if (r.status === 'draft' || r.status === 'submitted')
+      actions.append(mkBtn('Cancel', 'ghost', 'cancel', 'Cancel reason'));
+
+    tb.appendChild(el('tr', {},
+      el('td', {}, '#' + r.id),
+      el('td', {}, r.title),
+      el('td', {}, el('code', {}, r.kind)),
+      el('td', {}, el('span', { class: 'badge ' + statusBadgeClass(r.status) }, r.status)),
+      el('td', {}, new Date(r.created_at).toLocaleString()),
+      el('td', {}, actions),
+    ));
+  }
+  t.appendChild(tb);
+  card.appendChild(t);
+  root.appendChild(card);
+};
+
+// ---------- Settings (tenants, API tokens, channels, pollers) ----------
+views.settings = async (root) => {
+  root.appendChild(el('h2', {}, 'Settings'));
+
+  const sections = [
+    { id: 'tenants',  title: 'Tenants',                path: '/tenants',
+      cols: ['id', 'name', 'max_devices', 'created_at'] },
+    { id: 'tokens',   title: 'API tokens',             path: '/api-tokens',
+      cols: ['id', 'name', 'prefix', 'scopes', 'created_at', 'expires_at'] },
+    { id: 'channels', title: 'Notification channels',  path: '/notifications/channels',
+      cols: ['id', 'name', 'kind', 'created_at'] },
+    { id: 'rules',    title: 'Notification rules',     path: '/notifications/rules',
+      cols: ['id', 'name', 'event_type', 'channel_id', 'created_at'] },
+    { id: 'pollers',  title: 'Pollers',                path: '/pollers',
+      cols: ['id', 'zone', 'name', 'last_seen', 'created_at'] },
+  ];
+
+  for (const sec of sections) {
+    const card = el('div', { class: 'card' }, el('h3', {}, sec.title));
+    const dst = el('div', {}, el('p', { class: 'muted' }, 'Loading…'));
+    card.appendChild(dst);
+    root.appendChild(card);
+
+    let rows;
+    try { rows = await api('GET', sec.path); }
+    catch (e) {
+      dst.innerHTML = '';
+      dst.appendChild(el('p', { class: 'error' }, 'Error: ' + e.message));
+      continue;
+    }
+    dst.innerHTML = '';
+    if (!rows || !rows.length) {
+      dst.appendChild(el('p', { class: 'muted' }, 'None configured.'));
+      continue;
+    }
+    const t = el('table', { class: 'data' });
+    const head = '<thead><tr>' + sec.cols.map((c) => `<th>${escapeHTML(c)}</th>`).join('') + '</tr></thead>';
+    t.innerHTML = head;
+    const tb = el('tbody');
+    for (const r of rows) {
+      const tr = el('tr');
+      for (const c of sec.cols) {
+        let v = r[c];
+        if (v == null) v = '';
+        else if (Array.isArray(v)) v = v.join(', ');
+        else if (typeof v === 'object') v = JSON.stringify(v);
+        else if ((c.endsWith('_at') || c === 'last_seen') && v) {
+          const d = new Date(v);
+          if (!isNaN(d.getTime()) && d.getUTCFullYear() > 1) v = d.toLocaleString();
+          else v = '—';
+        }
+        tr.appendChild(el('td', {}, String(v)));
+      }
+      tb.appendChild(tr);
+    }
+    t.appendChild(tb);
+    dst.appendChild(t);
+  }
+};
 
 // ===========================================================
 // Login form + logout wiring

@@ -19,7 +19,7 @@ What's in the box:
 | Phase | Capability |
 |-------|------------|
 | 0 | Foundation: Go module, CI, config, logging, SQLite + migrations, envelope-encrypted secrets, local auth + RBAC, Prometheus metrics, Docker image, Helm chart |
-| 1 | Inventory CRUD, SSH transport, Cisco IOS / Arista EOS / Junos / MikroTik / generic-SSH drivers, git-backed config store, BackupNow + run history, embedded web UI, OpenAPI + Swagger UI |
+| 1 | Inventory CRUD, SSH transport, ~20 device drivers ([driver matrix](DRIVERS.md)) including Cisco IOS / IOS-XR / NX-OS, Arista EOS, Junos, MikroTik, Nokia SR OS, Huawei VRP, FortiOS, Palo Alto PAN-OS, plus generic SSH and ONT/OLT drivers; git-backed config store, BackupNow + run history, embedded web UI, OpenAPI + Swagger UI |
 | 2 | Diff engine with platform-aware ignore rules, ChangeEvent recording, notification channels (webhook / Slack / SMTP) and rules |
 | 3 | SQLite-FTS5 search across all stored configs, saved searches, CSV export of changes |
 | 4 | Compliance rule engine (regex / must-include / must-exclude / ordered-block), findings, transition-only notifications |
@@ -45,30 +45,72 @@ A short tour of the embedded web UI and operator endpoints. See
 The bootstrap admin password is printed once on first start, or pre-seeded via
 `NETMANTLE_BOOTSTRAP_ADMIN_PASSWORD`.
 
-![Sign-in screen](https://github.com/user-attachments/assets/c1ce27f8-93a1-49ab-8cf8-a344d3829b56)
+![Sign-in screen](https://github.com/user-attachments/assets/799a59e0-4728-4795-8b3e-efa979405802)
 
 ### Empty dashboard (first login)
 
-Two-pane layout: the left rail lists devices and exposes the **Add device** and
-**Add credential** forms; the right pane shows device detail.
+Two-pane Inventory layout: the left rail lists devices and exposes the
+**Add device** and **Add credential** forms; the right pane shows device detail.
 
-![Empty dashboard after first login](https://github.com/user-attachments/assets/aeb253c3-1106-491e-b574-44e3fe6e8211)
+![Empty dashboard after first login](https://github.com/user-attachments/assets/50200d85-ac6d-4f03-ae93-56568e3ffc80)
 
 ### Devices list with the Add device form open
 
 The driver dropdown is populated dynamically from the registered drivers
 (Cisco IOS / IOS-XR / NX-OS / NETCONF, Arista EOS, Junos CLI/NETCONF,
-MikroTik RouterOS, Nokia SR OS, gNMI, RESTCONF, generic SSH, and several
-ONT/OLT drivers).
+MikroTik RouterOS, Nokia SR OS, Huawei VRP, FortiOS, Palo Alto PAN-OS,
+gNMI, RESTCONF, generic SSH, and several ONT/OLT drivers — BDCOM, DBC, VSOL).
 
-![Devices list with Add device form expanded](https://github.com/user-attachments/assets/17f115ae-a7c9-46cf-b090-c2e6fc464005)
+![Devices list with Add device form expanded](https://github.com/user-attachments/assets/e313d2fa-3f1f-4787-9add-9ca233aa0510)
 
 ### Device detail
 
 Clicking a device shows the latest stored configuration, recent run history,
 and **Backup now** / **Delete** controls.
 
-![Device detail pane](https://github.com/user-attachments/assets/05e87d3a-ace8-47c2-9553-27493b2a6c33)
+![Device detail pane](https://github.com/user-attachments/assets/3b0b6939-0ad1-4dcc-8c01-b81183cce93c)
+
+### Backups & changes
+
+Recent change events are listed on the left; clicking one shows the unified
+diff and a **Mark reviewed** action.
+
+![Backups view with diff pane](https://github.com/user-attachments/assets/99260c71-3ead-4bb0-9fb4-9320c0ba660c)
+
+### Compliance
+
+Define rules (`must_include`, `must_exclude`, `regex`, `ordered_block`) with
+severities, and review findings produced when backups are evaluated.
+
+![Compliance rules table](https://github.com/user-attachments/assets/f1802cca-4055-4184-b7eb-946012b4d36f)
+
+### Approvals
+
+Change requests for push jobs flow through `draft → submitted → approved →
+applied`, with reviewer notes captured on each transition.
+
+![Approvals queue](https://github.com/user-attachments/assets/87733faa-6ce0-40d2-8f03-4ee3fbbe6a9b)
+
+### Topology
+
+LLDP/CDP neighbour reports stored as `neighbors` probe runs are merged into a
+deduplicated link list. A graph canvas renderer is tracked as follow-up work.
+
+![Topology nodes and links table](https://github.com/user-attachments/assets/a0eaa505-7565-4034-90e2-5f5779c20f44)
+
+### Audit log
+
+A filterable view of every state-changing API call, including the actor,
+source (`ui` / `api` / `scheduler` / `poller` / `system`), action, and target.
+
+![Audit log with filters](https://github.com/user-attachments/assets/7c38c33b-243f-4c65-aece-8029f2b51427)
+
+### Settings
+
+Tenants, API tokens, notification channels and rules, and registered pollers
+are each listed in a dedicated card.
+
+![Settings cards](https://github.com/user-attachments/assets/627ef38a-3f78-47a3-9b04-c53923632f42)
 
 ### Prometheus metrics
 
@@ -76,7 +118,7 @@ and **Backup now** / **Delete** controls.
 (uptime, HTTP request totals and latency histograms, backup outcomes, …) ready
 to be scraped by Prometheus.
 
-![Prometheus metrics endpoint](https://github.com/user-attachments/assets/51f690cf-2c98-4a54-8fc2-3d4366b55b16)
+![Prometheus metrics endpoint](https://github.com/user-attachments/assets/256feb6a-3a44-41ea-817b-6f206a67da11)
 
 ## Quickstart
 
