@@ -77,6 +77,8 @@ body {
 
 /* ---------- application shell ---------- */
 .shell { display: flex; min-height: calc(100vh - 49px); }
+/* The hidden attribute must beat display:flex on .shell when logged out. */
+[hidden] { display: none !important; }
 
 /* ---------- sidebar ---------- */
 .sidebar {
@@ -312,7 +314,7 @@ pre.config {
 
 /* ---------- login view ---------- */
 #login-view {
-  max-width: 380px;
+  max-width: 420px;
   margin: var(--space-6) auto;
   background: var(--surface-card);
   padding: var(--space-6);
@@ -321,10 +323,45 @@ pre.config {
   box-shadow: var(--shadow-md);
 }
 #login-view h2 {
-  margin: 0 0 var(--space-4) 0;
+  margin: 0 0 var(--space-1) 0;
   font-size: var(--font-size-xl);
   font-weight: 700;
   letter-spacing: -0.01em;
+}
+#login-view .login-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+#login-view .login-brand .brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+  color: var(--text-on-accent);
+  box-shadow: var(--shadow-accent);
+  flex-shrink: 0;
+}
+#login-view .login-brand .brand-mark svg { width: 24px; height: 24px; }
+#login-view .login-tagline {
+  margin: 2px 0 0 0;
+  font-size: var(--font-size-sm);
+  color: var(--text-muted);
+}
+#login-view .login-hint {
+  margin: var(--space-4) 0 0 0;
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+}
+#login-view .login-hint code {
+  font-family: var(--font-mono);
+  background: var(--surface-sunken);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
 }
 
 /* ---------- placeholder for not-yet-built views ---------- */
