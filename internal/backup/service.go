@@ -252,7 +252,7 @@ func (s *Service) LatestVersion(ctx context.Context, tenantID, deviceID int64, a
 	return body, sha, nil
 }
 
-// ReadVersion returns the content of a previously committed artefact at
+// ReadVersion returns the content of a previously committed artifact at
 // a specific commit SHA. It is the read side of the rollback workflow:
 // the API surface uses it to render a diff against the live config and
 // to capture the bytes that an approved ChangeRequest will re-apply.

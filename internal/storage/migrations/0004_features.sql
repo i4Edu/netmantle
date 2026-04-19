@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS change_requests (
     push_job_id     INTEGER REFERENCES push_jobs(id) ON DELETE SET NULL,
     variables       TEXT,                 -- JSON snapshot of overrides for push
     device_id       INTEGER REFERENCES devices(id) ON DELETE SET NULL,
-    artifact        TEXT,                 -- rollback target artefact name
+    artifact        TEXT,                 -- rollback target artifact name
     target_sha      TEXT,                 -- rollback target commit SHA
     payload         TEXT,                 -- rendered config (rollback) or null
     result          TEXT,                 -- post-apply executor output
