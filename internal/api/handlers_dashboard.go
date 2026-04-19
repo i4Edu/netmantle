@@ -19,8 +19,8 @@ import (
 // are 0..100 (percent) or absolute counts.
 type dashboardSummary struct {
 	Devices struct {
-		Total    int `json:"total"`
-		AddedRow int `json:"added_recent"` // added in the last 7 days
+		Total       int `json:"total"`
+		AddedRecent int `json:"added_recent"` // added in the last 7 days
 	} `json:"devices"`
 
 	Compliance struct {
@@ -53,10 +53,10 @@ type dashboardSummary struct {
 }
 
 type driverStatus struct {
-	Driver  string `json:"driver"`
-	Total   int    `json:"total"`
-	Compl   int    `json:"compliant"` // devices with no failing finding
-	Percent int    `json:"percent"`
+	Driver    string `json:"driver"`
+	Total     int    `json:"total"`
+	Compliant int    `json:"compliant"` // devices with no failing finding
+	Percent   int    `json:"percent"`
 }
 
 type driftHotspot struct {
@@ -87,7 +87,7 @@ func (s *server) handleDashboardSummary(w http.ResponseWriter, r *http.Request) 
 			cutoff := now.AddDate(0, 0, -7)
 			for _, d := range devs {
 				if d.CreatedAt.After(cutoff) {
-					out.Devices.AddedRow++
+					out.Devices.AddedRecent++
 				}
 			}
 			// Status-by-driver tallies (compliance overlay below).
@@ -112,12 +112,12 @@ func (s *server) handleDashboardSummary(w http.ResponseWriter, r *http.Request) 
 			}
 			for _, d := range devs {
 				if fails[d.ID] == 0 {
-					byDriver[d.Driver].Compl++
+					byDriver[d.Driver].Compliant++
 				}
 			}
 			for _, ds := range byDriver {
 				if ds.Total > 0 {
-					ds.Percent = (ds.Compl * 100) / ds.Total
+					ds.Percent = (ds.Compliant * 100) / ds.Total
 				}
 				out.StatusByDriver = append(out.StatusByDriver, *ds)
 			}

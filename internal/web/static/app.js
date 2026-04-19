@@ -271,9 +271,7 @@ async function renderDeviceCards(devices) {
     const passes = passByDev[d.id] || 0;
     const evaluated = fails + passes;
     const score = evaluated > 0 ? Math.round((passes * 100) / evaluated) : null;
-    const cls = fails === 0 ? 'ok' : (fails >= 3 ? 'bad' : 'warn');
-    const status = fails === 0 ? (evaluated === 0 ? 'no rules' : 'compliant')
-                                : (fails >= 3 ? 'violation' : 'drift');
+    const { cls, label: status } = complianceStatus(fails, evaluated > 0);
 
     // Last backup: pull from runs in a separate request per card. Cheap at
     // small scale, batchable later via a new endpoint if needed.
@@ -518,6 +516,21 @@ function statusBadgeClass(status) {
     default:
       return 'info';
   }
+}
+
+// VIOLATION_THRESHOLD is the number of failing compliance findings at which
+// a device is considered to be in "violation" rather than just "drift".
+// Centralised here so the dashboard, inventory cards and topology canvas
+// classify a device the same way.
+const VIOLATION_THRESHOLD = 3;
+
+// complianceStatus maps a failing-rule count to a (badge-class, label) pair.
+// Used by the inventory cards and the topology side panel.
+function complianceStatus(failingCount, hasRules) {
+  if (!hasRules) return { cls: 'info', label: 'no rules' };
+  if (failingCount === 0) return { cls: 'ok', label: 'compliant' };
+  if (failingCount >= VIOLATION_THRESHOLD) return { cls: 'bad', label: 'violation' };
+  return { cls: 'warn', label: 'drift' };
 }
 
 // ---------- Backups (recent change events with two-pane Git-style diff) ----------
@@ -919,7 +932,7 @@ views.topology = async (root) => {
     circle.setAttribute('r', 10);
     const f = failsByHost[n.name] || 0;
     let cls = 'unknown';
-    if (devByHost[n.name]) cls = f === 0 ? 'ok' : (f >= 3 ? 'bad' : 'warn');
+    if (devByHost[n.name]) cls = complianceStatus(f, true).cls;
     circle.setAttribute('class', cls);
     const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
     t.setAttribute('y', 24);
@@ -943,8 +956,7 @@ function showTopologyNode(name, device, fails) {
   }
   side.appendChild(el('p', { class: 'muted' },
     `${device.driver} • ${device.address}:${device.port}`));
-  const status = fails === 0 ? 'compliant' : (fails >= 3 ? 'violation' : 'drift');
-  const cls = fails === 0 ? 'ok' : (fails >= 3 ? 'bad' : 'warn');
+  const { cls, label: status } = complianceStatus(fails, true);
   side.appendChild(el('p', {}, el('span', { class: 'badge ' + cls }, status),
     ' ', String(fails) + ' failing rule' + (fails === 1 ? '' : 's')));
   const open = el('button', { class: 'btn' }, 'Open device →');
