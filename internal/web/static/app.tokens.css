@@ -6,55 +6,72 @@
  * Every color is mapped to a semantic role rather than a literal hue so
  * status colors (ok / warn / bad), surfaces and text remain consistent
  * across pages. See docs/ui-style-guide.md for the rationale.
+ *
+ * The palette is inspired by modern admin themes (Metronic / Tabler /
+ * Tailwind UI) — softer neutrals, an Inter-led system font stack, slightly
+ * larger radii, and a brand indigo accent — while remaining 100% original
+ * CSS that ships inside the embedded Go binary (no third-party assets).
  */
 
 :root, [data-theme='light'] {
   /* surfaces */
-  --surface-page:    #f6f7f9;
+  --surface-page:    #f4f6fa;
   --surface-card:    #ffffff;
-  --surface-sunken:  #eef1f4;
+  --surface-sunken:  #eef1f6;
   --surface-overlay: rgba(15, 23, 42, 0.5);
 
   /* text */
-  --text-strong:    #0f172a;
-  --text-default:   #1c1f23;
-  --text-muted:     #5b6470;
+  --text-strong:    #181c32;
+  --text-default:   #2a2f45;
+  --text-muted:     #6b7280;
   --text-on-accent: #ffffff;
 
   /* lines */
-  --border-default: #e3e7ec;
-  --border-strong:  #cdd5dd;
+  --border-default: #e4e6ef;
+  --border-strong:  #d1d5db;
 
-  /* accent / brand */
-  --accent:         #2f6feb;
-  --accent-hover:   #2456c2;
-  --accent-soft:    #eef3fb;
+  /* accent / brand — indigo, the canonical "modern admin" hue */
+  --accent:         #3e57e6;
+  --accent-hover:   #2f44c2;
+  --accent-soft:    #eef1ff;
 
   /* status — used for badges, dots, borders */
-  --status-ok:      #1a7f37; /* compliant     / success */
-  --status-ok-soft: #e6f4ea;
-  --status-warn:    #b58900; /* drift         / running / pending */
+  --status-ok:      #17a673; /* compliant     / success */
+  --status-ok-soft: #e8f7f0;
+  --status-warn:    #c98a00; /* drift         / running / pending */
   --status-warn-soft:#fff4d6;
-  --status-bad:     #b00020; /* violation     / failed  / rejected */
-  --status-bad-soft:#fde7ea;
-  --status-info:    #2f6feb; /* informational / approved */
-  --status-info-soft:#eef3fb;
+  --status-bad:     #d93232; /* violation     / failed  / rejected */
+  --status-bad-soft:#fdecec;
+  --status-info:    #3e57e6; /* informational / approved */
+  --status-info-soft:#eef1ff;
 
-  /* sidebar */
-  --sidebar-bg:        #102a43;
-  --sidebar-fg:        #cfd8e3;
+  /* sidebar — deep slate with a hint of indigo */
+  --sidebar-bg:        #1e1e2d;
+  --sidebar-fg:        #a2a3b7;
   --sidebar-fg-active: #ffffff;
-  --sidebar-active-bg: #1d3a5f;
+  --sidebar-active-bg: #2a2a3c;
 
-  /* typography scale */
-  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* topbar — a separate variable so the topbar can be light while the
+   * sidebar stays dark (the Metronic / Tabler convention) */
+  --topbar-bg:        #ffffff;
+  --topbar-fg:        #2a2f45;
+  --topbar-border:    #e4e6ef;
+
+  /* typography scale.
+   * Inter is listed first because it is the preferred face for this
+   * theme — it renders if the user has it installed locally — but it is
+   * NOT bundled or fetched from a CDN (the embedded UI must stay
+   * dependency-free). On systems without Inter the stack falls through
+   * to the platform sans-serif, which is the documented intent. See
+   * docs/ui-style-guide.md § Typography. */
+  --font-sans: "Inter", -apple-system, "Segoe UI", Roboto, "Helvetica Neue", system-ui, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --font-size-xs:  0.75rem;
   --font-size-sm:  0.85rem;
   --font-size-md:  0.95rem;
   --font-size-lg:  1.1rem;
   --font-size-xl:  1.4rem;
-  --line-height:   1.45;
+  --line-height:   1.5;
 
   /* spacing scale (4px base) */
   --space-1: 0.25rem;
@@ -65,80 +82,95 @@
   --space-6: 2rem;
 
   /* radius / shadow */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
-  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
-  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
+  --radius-sm:   6px;
+  --radius-md:   8px;
+  --radius-lg:   12px;
+  --radius-pill: 999px; /* fully rounded — used for nav pills, chips, toggle buttons */
+  --shadow-sm: 0 1px 2px rgba(24, 28, 50, 0.05);
+  --shadow-md: 0 6px 16px rgba(24, 28, 50, 0.08);
+  /* coloured glow used on the active sidebar pill — gives the indigo accent
+   * the same "lifted" feel as the Metronic active state without bringing in
+   * any third-party CSS. */
+  --shadow-accent: 0 4px 12px rgba(62, 87, 230, 0.35);
 
   /* motion */
   --transition-fast: 120ms ease;
 }
 
 [data-theme='dark'] {
-  --surface-page:    #0e141b;
-  --surface-card:    #161d26;
-  --surface-sunken:  #1c242f;
+  --surface-page:    #0f1117;
+  --surface-card:    #181a23;
+  --surface-sunken:  #20232f;
   --surface-overlay: rgba(0, 0, 0, 0.6);
 
-  --text-strong:    #f1f5f9;
-  --text-default:   #e2e8f0;
-  --text-muted:     #94a3b8;
+  --text-strong:    #f5f6fa;
+  --text-default:   #e2e4ee;
+  --text-muted:     #9ca0b3;
   --text-on-accent: #ffffff;
 
-  --border-default: #25303d;
-  --border-strong:  #34404f;
+  --border-default: #262936;
+  --border-strong:  #353947;
 
-  --accent:         #60a5fa;
-  --accent-hover:   #3b82f6;
-  --accent-soft:    #1f2a3a;
+  --accent:         #7187ff;
+  --accent-hover:   #5468ec;
+  --accent-soft:    #1f2440;
 
-  --status-ok:      #4ade80;
-  --status-ok-soft: #14321f;
-  --status-warn:    #facc15;
-  --status-warn-soft:#3a2e0b;
+  --status-ok:      #34d399;
+  --status-ok-soft: #103024;
+  --status-warn:    #fbbf24;
+  --status-warn-soft:#3a2c08;
   --status-bad:     #f87171;
   --status-bad-soft:#3a161b;
-  --status-info:    #60a5fa;
-  --status-info-soft:#1f2a3a;
+  --status-info:    #7187ff;
+  --status-info-soft:#1f2440;
 
-  --sidebar-bg:        #0a141f;
-  --sidebar-fg:        #94a3b8;
+  --sidebar-bg:        #15161f;
+  --sidebar-fg:        #8a8da0;
   --sidebar-fg-active: #ffffff;
-  --sidebar-active-bg: #1d3a5f;
+  --sidebar-active-bg: #232536;
+
+  --topbar-bg:      #181a23;
+  --topbar-fg:      #e2e4ee;
+  --topbar-border:  #262936;
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.45);
+  --shadow-accent: 0 4px 14px rgba(113, 135, 255, 0.35);
 }
 
 /* When OS prefers dark and no explicit override has been set, follow it. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
     color-scheme: dark;
-    --surface-page:    #0e141b;
-    --surface-card:    #161d26;
-    --surface-sunken:  #1c242f;
+    --surface-page:    #0f1117;
+    --surface-card:    #181a23;
+    --surface-sunken:  #20232f;
     --surface-overlay: rgba(0, 0, 0, 0.6);
-    --text-strong:    #f1f5f9;
-    --text-default:   #e2e8f0;
-    --text-muted:     #94a3b8;
-    --border-default: #25303d;
-    --border-strong:  #34404f;
-    --accent:         #60a5fa;
-    --accent-hover:   #3b82f6;
-    --accent-soft:    #1f2a3a;
-    --status-ok:      #4ade80;
-    --status-ok-soft: #14321f;
-    --status-warn:    #facc15;
-    --status-warn-soft:#3a2e0b;
+    --text-strong:    #f5f6fa;
+    --text-default:   #e2e4ee;
+    --text-muted:     #9ca0b3;
+    --border-default: #262936;
+    --border-strong:  #353947;
+    --accent:         #7187ff;
+    --accent-hover:   #5468ec;
+    --accent-soft:    #1f2440;
+    --status-ok:      #34d399;
+    --status-ok-soft: #103024;
+    --status-warn:    #fbbf24;
+    --status-warn-soft:#3a2c08;
     --status-bad:     #f87171;
     --status-bad-soft:#3a161b;
-    --status-info:    #60a5fa;
-    --status-info-soft:#1f2a3a;
-    --sidebar-bg:        #0a141f;
-    --sidebar-fg:        #94a3b8;
+    --status-info:    #7187ff;
+    --status-info-soft:#1f2440;
+    --sidebar-bg:        #15161f;
+    --sidebar-fg:        #8a8da0;
     --sidebar-fg-active: #ffffff;
+    --sidebar-active-bg: #232536;
+    --topbar-bg:      #181a23;
+    --topbar-fg:      #e2e4ee;
+    --topbar-border:  #262936;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 6px 16px rgba(0, 0, 0, 0.45);
+    --shadow-accent: 0 4px 14px rgba(113, 135, 255, 0.35);
   }
 }

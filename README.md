@@ -37,8 +37,18 @@ tagged release. Do not yet rely on it for production.
 
 ## Screenshots
 
-A short tour of the embedded web UI and operator endpoints. See
-[docs/user-guide.md](docs/user-guide.md) for step-by-step walkthroughs.
+A short tour of the embedded web UI and operator endpoints. The UI ships
+with a modern admin-style theme — a sticky light top bar with a gradient
+brand mark, a deep slate sidebar with pill-style active items, soft
+shadowed cards, an Inter-led system font stack, and matching light/dark
+modes. It is built with vanilla JS + hand-rolled CSS (no framework, no
+build step, no third-party CSS); see
+[docs/ui-style-guide.md](docs/ui-style-guide.md) for the design tokens
+and [docs/user-guide.md](docs/user-guide.md) for step-by-step walkthroughs.
+
+> The screenshots below were captured against the previous theme and are
+> pending a refresh against the current one. Section descriptions already
+> match the current UI.
 
 ### Sign-in
 
