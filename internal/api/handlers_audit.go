@@ -42,6 +42,9 @@ func (s *server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 	if v := q.Get("target"); v != "" {
 		f.Target = v
 	}
+	if v := q.Get("request_id"); v != "" {
+		f.RequestID = v
+	}
 	if v := q.Get("since"); v != "" {
 		t, err := parseRFC3339Loose(v)
 		if err != nil {

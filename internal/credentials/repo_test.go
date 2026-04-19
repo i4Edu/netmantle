@@ -63,6 +63,53 @@ func TestCredentialsRoundtrip(t *testing.T) {
 	}
 }
 
+func TestCredentialsUseUpdatesLastUsedAndZeroises(t *testing.T) {
+	r, tid := setup(t)
+	ctx := context.Background()
+	c, err := r.Create(ctx, Credential{TenantID: tid, Name: "u", Username: "admin"}, "s3cret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := r.Get(ctx, tid, c.ID); got.LastUsedAt != nil {
+		t.Fatalf("last_used_at should be nil before Use, got %v", got.LastUsedAt)
+	}
+
+	var calledUser, calledSecret string
+	if err := r.Use(ctx, tid, c.ID, func(u, s string) error {
+		calledUser, calledSecret = u, s
+		return nil
+	}); err != nil {
+		t.Fatalf("use: %v", err)
+	}
+	if calledUser != "admin" || calledSecret != "s3cret" {
+		t.Fatalf("decrypted wrong: %q %q", calledUser, calledSecret)
+	}
+	got, err := r.Get(ctx, tid, c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastUsedAt == nil {
+		t.Fatal("expected last_used_at to be set after Use")
+	}
+
+	// Use propagates fn errors.
+	wantErr := errSentinel
+	if err := r.Use(ctx, tid, c.ID, func(_, _ string) error { return wantErr }); err != wantErr {
+		t.Fatalf("expected fn error to bubble, got %v", err)
+	}
+
+	// Use against a missing id returns ErrNotFound.
+	if err := r.Use(ctx, tid, c.ID+999, func(_, _ string) error { return nil }); err != ErrNotFound {
+		t.Fatalf("expected ErrNotFound for missing id, got %v", err)
+	}
+}
+
+var errSentinel = errSentinelT("sentinel")
+
+type errSentinelT string
+
+func (e errSentinelT) Error() string { return string(e) }
+
 func TestSecretIsEncryptedAtRest(t *testing.T) {
 	r, tid := setup(t)
 	ctx := context.Background()

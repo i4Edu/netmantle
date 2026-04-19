@@ -21,6 +21,7 @@ servers:
   - url: /api/v1
 security:
   - cookieAuth: []
+  - bearerAuth: []
 paths:
   /auth/login:
     post:
@@ -414,12 +415,128 @@ paths:
       summary: Configure GitOps mirror (admin only)
       responses: {'204': {description: No Content}}
 
+  # ----------------------------------------------------------------
+  # Approval workflow (Phase B) and rollback (Phase D).
+  # ----------------------------------------------------------------
+  /change-requests:
+    get:
+      summary: List change requests for the caller's tenant
+      parameters:
+        - in: query
+          name: status
+          schema: {type: string, enum: [draft, submitted, approved, rejected, applied, failed, cancelled]}
+      responses:
+        '200':
+          description: OK
+          content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/ChangeRequest'}}}}
+    post:
+      summary: Create a change request (initial state is `draft`)
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/ChangeRequestInput'}}}
+      responses:
+        '201':
+          description: Created
+          content: {application/json: {schema: {$ref: '#/components/schemas/ChangeRequest'}}}
+  /change-requests/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get:
+      summary: Get a change request and its event timeline
+      responses: {'200': {description: OK}}
+  /change-requests/{id}/submit:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      summary: Submit a draft for review
+      responses: {'200': {description: OK}, '409': {description: Invalid transition}}
+  /change-requests/{id}/approve:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      summary: Approve a submitted request (admin only; non-admin reviewer cannot self-approve)
+      requestBody:
+        content: {application/json: {schema: {type: object, properties: {reason: {type: string}}}}}
+      responses:
+        '200': {description: OK}
+        '403': {description: Self-approval forbidden}
+        '409': {description: Invalid transition}
+  /change-requests/{id}/reject:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      summary: Reject a submitted request (admin only)
+      responses: {'200': {description: OK}}
+  /change-requests/{id}/cancel:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      summary: Cancel a non-terminal request (requester or admin)
+      responses: {'200': {description: OK}}
+  /change-requests/{id}/apply:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      summary: Apply an approved request via the executor
+      responses:
+        '200': {description: Applied}
+        '409': {description: Not in approved state}
+        '502': {description: Executor failed}
+  /devices/{id}/rollback:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      summary: Roll a device back to a historical config version
+      description: |
+        Creates a `kind=rollback` ChangeRequest carrying the historical config
+        bytes. By default the request is left in `draft` state and must be
+        submitted + approved before apply. Admins may pass `immediate=true`
+        to short-circuit the queue (still audited).
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/RollbackInput'}}}
+      responses:
+        '201': {description: Created (queued)}
+        '200': {description: Applied (immediate=true, admin only)}
+        '403': {description: Immediate rollback requires admin}
+        '404': {description: Historical version not found}
+
+  # ----------------------------------------------------------------
+  # API tokens (Phase E).
+  # ----------------------------------------------------------------
+  /api-tokens:
+    get:
+      summary: List API tokens for the caller's tenant
+      responses: {'200': {description: OK}}
+    post:
+      summary: Issue a new API token (the secret is returned exactly once)
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/APITokenInput'}}}
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: {$ref: '#/components/schemas/APIToken'}
+                  secret: {type: string, description: 'Bearer secret. Store now — never shown again.'}
+                  warning: {type: string}
+  /api-tokens/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    delete:
+      summary: Revoke a token
+      responses: {'204': {description: No Content}}
+
 components:
   securitySchemes:
     cookieAuth:
       type: apiKey
       in: cookie
       name: netmantle_session
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: nmt_<prefix>_<secret>
+      description: |
+        Long-lived API token issued via `POST /api-tokens`. Use for
+        machine-to-machine integrations (billing, provisioning, CI). Tokens
+        are scoped; admin sessions implicitly grant every scope.
   parameters:
     Id:
       in: path
@@ -590,3 +707,72 @@ components:
               local_port: {type: string}
               remote_port: {type: string}
 
+    ChangeRequestInput:
+      type: object
+      required: [kind, title]
+      properties:
+        kind: {type: string, enum: [push, rollback]}
+        title: {type: string}
+        description: {type: string}
+        push_job_id: {type: integer, format: int64, nullable: true}
+        variables:
+          type: object
+          additionalProperties: {type: string}
+        device_id: {type: integer, format: int64, nullable: true}
+        artifact: {type: string}
+        target_sha: {type: string}
+    ChangeRequest:
+      type: object
+      properties:
+        id: {type: integer, format: int64}
+        tenant_id: {type: integer, format: int64}
+        kind: {type: string}
+        title: {type: string}
+        description: {type: string}
+        requester_id: {type: integer, format: int64}
+        reviewer_id: {type: integer, format: int64, nullable: true}
+        status: {type: string}
+        decision_reason: {type: string}
+        push_job_id: {type: integer, format: int64, nullable: true}
+        device_id: {type: integer, format: int64, nullable: true}
+        artifact: {type: string}
+        target_sha: {type: string}
+        result: {type: string}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        submitted_at: {type: string, format: date-time, nullable: true}
+        decided_at: {type: string, format: date-time, nullable: true}
+        applied_at: {type: string, format: date-time, nullable: true}
+    RollbackInput:
+      type: object
+      required: [artifact, target_sha]
+      properties:
+        artifact: {type: string, example: running-config}
+        target_sha: {type: string}
+        reason: {type: string}
+        immediate: {type: boolean, description: 'Admin-only: pre-approve and apply in one call.'}
+    APITokenInput:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string}
+        scopes:
+          type: array
+          items: {type: string}
+          example: [device:read, changereq:approve]
+        expires_at: {type: string, format: date-time}
+    APIToken:
+      type: object
+      properties:
+        id: {type: integer, format: int64}
+        tenant_id: {type: integer, format: int64}
+        owner_user_id: {type: integer, format: int64}
+        name: {type: string}
+        prefix: {type: string}
+        scopes:
+          type: array
+          items: {type: string}
+        created_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time, nullable: true}
+        last_used_at: {type: string, format: date-time, nullable: true}
+        revoked_at: {type: string, format: date-time, nullable: true}
