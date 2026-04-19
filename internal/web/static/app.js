@@ -553,24 +553,46 @@ views.compliance = async (root) => {
   const renderFindings = async () => {
     const dst = $('#findings-table');
     if (!dst) return;
-    let findings;
-    try { findings = await api('GET', '/compliance/findings'); }
-    catch (e) { dst.innerHTML = ''; dst.appendChild(el('p', { class: 'error' }, 'Error: ' + e.message)); return; }
+    let findings, rules;
+    try {
+      [findings, rules] = await Promise.all([
+        api('GET', '/compliance/findings'),
+        api('GET', '/compliance/rules'),
+      ]);
+    } catch (e) { dst.innerHTML = ''; dst.appendChild(el('p', { class: 'error' }, 'Error: ' + e.message)); return; }
     dst.innerHTML = '';
     if (!findings.length) { dst.appendChild(el('p', { class: 'muted' }, 'No findings yet — back up a device with rules defined.')); return; }
-    const t = el('table', { class: 'data' });
-    t.innerHTML = '<thead><tr><th>Device</th><th>Rule</th><th>Status</th><th>Detail</th></tr></thead>';
-    const tb = el('tbody');
+    const ruleByID = new Map((rules || []).map((r) => [r.id, r]));
+    const sevOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+    const groups = new Map();
     for (const f of findings) {
-      tb.appendChild(el('tr', {},
-        el('td', {}, '#' + f.device_id),
-        el('td', {}, '#' + f.rule_id),
-        el('td', {}, el('span', { class: 'badge ' + statusBadgeClass(f.status) }, f.status)),
-        el('td', {}, f.detail || ''),
-      ));
+      const rule = ruleByID.get(f.rule_id);
+      const sev = (rule && rule.severity) || 'unknown';
+      if (!groups.has(sev)) groups.set(sev, []);
+      groups.get(sev).push({ ...f, _rule: rule });
     }
-    t.appendChild(tb);
-    dst.appendChild(t);
+    const sevs = Array.from(groups.keys()).sort(
+      (a, b) => (sevOrder[a] ?? 99) - (sevOrder[b] ?? 99));
+    for (const sev of sevs) {
+      const group = groups.get(sev);
+      dst.appendChild(el('h4', { class: 'finding-group' },
+        el('span', { class: 'badge ' + statusBadgeClass(sev === 'critical' || sev === 'high' ? 'fail' : (sev === 'low' ? 'pass' : 'pending')) }, sev),
+        ' ', String(group.length) + (group.length === 1 ? ' finding' : ' findings')));
+      const t = el('table', { class: 'data' });
+      t.innerHTML = '<thead><tr><th>Device</th><th>Rule</th><th>Status</th><th>Detail</th></tr></thead>';
+      const tb = el('tbody');
+      for (const f of group) {
+        const ruleLabel = f._rule ? `${f._rule.name} (#${f.rule_id})` : '#' + f.rule_id;
+        tb.appendChild(el('tr', {},
+          el('td', {}, '#' + f.device_id),
+          el('td', {}, ruleLabel),
+          el('td', {}, el('span', { class: 'badge ' + statusBadgeClass(f.status) }, f.status)),
+          el('td', {}, f.detail || ''),
+        ));
+      }
+      t.appendChild(tb);
+      dst.appendChild(t);
+    }
   };
 
   form.addEventListener('submit', async (e) => {
@@ -651,8 +673,9 @@ views.approvals = async (root) => {
       b.onclick = async () => {
         const body = {};
         if (prompt) {
-          const reason = window.prompt(prompt + ' (optional)') || '';
-          if (reason) body.reason = reason;
+          const reason = window.prompt(prompt + ' (optional)');
+          if (reason === null) return;          // user aborted the prompt
+          if (reason !== '') body.reason = reason;
         }
         try { await api('POST', `/change-requests/${r.id}/${op}`, prompt ? body : undefined); reload(); }
         catch (e) { alert('Failed: ' + e.message); }

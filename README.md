@@ -101,7 +101,7 @@ deduplicated link list. A graph canvas renderer is tracked as follow-up work.
 ### Audit log
 
 A filterable view of every state-changing API call, including the actor,
-source (`web` / `api` / `terminal`), action, and target.
+source (`ui` / `api` / `scheduler` / `poller` / `system`), action, and target.
 
 ![Audit log with filters](https://github.com/user-attachments/assets/7c38c33b-243f-4c65-aece-8029f2b51427)
 
