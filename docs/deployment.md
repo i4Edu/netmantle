@@ -112,7 +112,8 @@ docker compose up --build
 
 The chart lives at [`deploy/helm/netmantle`](../deploy/helm/netmantle) and
 defaults to **2 replicas**. Replicas race for the leader lease
-(`scheduler-leases` row, 30 s TTL); only the leader runs scheduled jobs.
+(`scheduled-jobs` in the `scheduler_leases` table, 30 s TTL); only the
+leader runs scheduled jobs.
 
 ### Install
 

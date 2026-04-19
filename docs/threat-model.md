@@ -20,7 +20,7 @@ follow‑up work.
 | Master passphrase / KEK | Operator‑provided env (`NETMANTLE_SECURITY_MASTER_PASSPHRASE`) | Decrypts every stored credential and mirror token |
 | Session signing key | `security.session_key` (env or generated) | Forges any user's session if leaked |
 | Device configuration history | Per‑device git repos under `storage.config_repo_root` | Plaintext configs may contain pre‑shared keys, BGP MD5, SNMP communities, etc. |
-| Audit log | `audit` table | Tamper‑evident record of operator actions |
+| Audit log | `audit` table | Audit trail of operator actions; integrity depends on DB/file access controls |
 | GitOps mirror tokens | `gitops_mirrors.secret_envelope`, envelope‑encrypted | Push access to an external git remote |
 | Notification channel config | `notification_channels.config` (JSON) | Webhook URLs, Slack tokens, SMTP creds (SMTP password is sealed; others are not — see §5) |
 | Tenant boundary | `tenant_id` column on every multi‑tenant row | Cross‑tenant data leakage is a privacy / contractual incident |
@@ -49,19 +49,21 @@ follow‑up work.
 - **netmantle → SQLite + git repos**: filesystem trust. Anyone with read
   access to the data volume can read all encrypted blobs **and** the git
   history (which is plaintext).
-- **netmantle → devices / external services**: outbound only. NetMantle does
-  not currently pin known‑hosts for SSH.
+- **netmantle → devices / external services**: outbound only. For SSH,
+  NetMantle performs in‑memory TOFU‑style host‑key pinning for the lifetime
+  of the process, but does not currently persist pins in a durable
+  `known_hosts` store.
 
 ## 3. Threat → mitigation matrix
 
 | # | Threat | Likelihood / Impact | Mitigation today | Gap (tracked follow‑up) |
 |---|--------|---------------------|------------------|--------------------------|
-| T1 | Unauthenticated API access | High / High | Session cookie + bcrypt password auth; RBAC (`admin`/`operator`/`viewer`); only `/auth/login`, `/healthz`, `/readyz` are anonymous | Per‑tenant API rate limiting |
+| T1 | Unauthenticated API access | High / High | Session cookie + bcrypt password auth; RBAC (`admin`/`operator`/`viewer`); anonymous routes are limited to `/api/v1/auth/login`, `/api/openapi.yaml`, `/api/docs`, `/metrics`, `/healthz`, `/readyz`, and the embedded UI under `/` | Per‑tenant API rate limiting |
 | T2 | Privilege escalation across roles | Med / High | RBAC checked at handler entry; `*auth.User` injected via context | Periodic third‑party RBAC audit |
 | T3 | Cross‑tenant data leak | Med / High | Every query scoped by `tenant_id = ?` at repo/service layer; tenant quota enforced on device create | Automated property tests for tenant isolation |
 | T4 | Stored credential exfiltration via DB read | Med / High | Envelope encryption (`internal/crypto`); plaintext never returned by API | Hardware‑backed KEK (HSM/KMS) |
 | T5 | KEK / master passphrase leak | Low / Critical | Sourced from env; never logged; never written to disk by NetMantle | First‑class rotation CLI; HSM‑backed KEK |
-| T6 | Session token forgery | Low / High | HMAC‑signed session cookies; key configurable; cookie name configurable | Force `Secure` + `HttpOnly` flags through deploy guidance only — see §6 |
+| T6 | Session token forgery / interception | Low / High | HMAC‑signed session cookies; key configurable; cookie name configurable; cookie set with `HttpOnly` + `SameSite=Lax` in code; `Secure` set when the request reaches the app via TLS | Proxy‑aware `Secure` flag (set unconditionally when fronted by trusted TLS terminator) — see §6 |
 | T7 | SSH MITM during device backup | Med / High | Per‑device timeout; credential cleartext scoped to dial via `credRepo.Use(...)` | **Known‑hosts enforcement** — currently trust‑on‑first‑use |
 | T8 | Plaintext configuration leak (git repos) | Med / High | Filesystem permissions on the data volume | Optional encrypted‑at‑rest repo storage |
 | T9 | GitOps mirror token leak | Low / Med | Envelope‑encrypted in `gitops_mirrors.secret_envelope` | Token rotation reminder / expiry warning |
@@ -104,10 +106,14 @@ follow‑up work.
 ## 6. Cookies, transport, and headers
 
 - NetMantle does not terminate TLS. Operators must front it with TLS.
-- The session cookie should be served as `Secure` and `HttpOnly`. Today this
-  is enforced operationally (HTTPS at the proxy, no JavaScript path that
-  reads the cookie). Hardening to set the flags unconditionally in the cookie
-  itself is tracked as a follow‑up.
+- The API server sets `HttpOnly` and `SameSite=Lax` on the session cookie in
+  code.
+- The remaining gap is the `Secure` attribute: it is only set when the
+  request reaches the app over TLS (`r.TLS != nil`). When TLS is terminated
+  at a reverse proxy or ingress, the cookie will not carry `Secure` until
+  proxy‑aware hardening lands. Until then, operators must ensure their
+  deployment only exposes NetMantle behind HTTPS so the unflagged cookie is
+  never sent over plaintext.
 
 ## 7. Multi‑tenancy
 

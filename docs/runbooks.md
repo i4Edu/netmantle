@@ -25,8 +25,9 @@ First three things to check on any incident:
 
 1. Are both probes returning `200`? If `readyz` is failing, look at startup
    logs for migration / DB open errors.
-2. Is the `scheduler-leases` row in the database current? A stale lease past
-   its TTL means no replica is currently leading scheduled work.
+2. Is the `scheduled-jobs` lease in the `scheduler_leases` table current? A
+   stale lease past its TTL means no replica is currently leading scheduled
+   work.
 3. Is the persistent volume nearing capacity? SQLite + per‑device git repos
    grow over time.
 
@@ -44,15 +45,37 @@ was not captured.
    ```
    sqlite3 /var/lib/netmantle/netmantle.db
    ```
-3. Delete or disable the relevant admin row in `users`:
+3. Choose **one** recovery path below. Do **not** delete only the `admin`
+   row and assume bootstrap will rerun: bootstrap only fires when the
+   `users` table is **completely empty**
+   (`SELECT COUNT(*) FROM users = 0`).
+
+   **Option A — force bootstrap by emptying auth state**
+
+   Clear dependent auth rows first, then remove all users:
    ```sql
-   DELETE FROM users WHERE username = 'admin';
+   DELETE FROM sessions;
+   DELETE FROM users;
    ```
-   (Or set `disabled = 1` if you want to keep history — adjust to the actual
-   schema; check `internal/storage/migrations/`.)
-4. Restart NetMantle. With an empty (or admin‑less) `users` table, the
-   bootstrap path runs again and prints a fresh one‑time password.
-5. Capture it from the log immediately and create a named admin via the UI.
+   If your schema has additional tables with foreign keys to `users`, clear
+   those as well; verify against `internal/storage/migrations/`.
+
+   Restart NetMantle. Because `users` is now empty, the bootstrap path runs
+   again and prints a fresh one‑time password. Capture it from the logs
+   immediately, sign in, and recreate any other users you need.
+
+   **Option B — reset the existing admin password in place**
+
+   Generate a bcrypt hash for a temporary password on a trusted machine
+   (any `bcrypt` cost ≥ 10), then update the admin row directly:
+   ```sql
+   UPDATE users
+   SET password_hash = '$2b$12$REPLACE_WITH_BCRYPT_HASH'
+   WHERE username = 'admin';
+   ```
+   This avoids relying on bootstrap logic and preserves the rest of the
+   `users` table. Restart NetMantle, log in as `admin` with the temporary
+   password, then rotate it immediately in the UI.
 
 **Prevention.** Always preset `NETMANTLE_BOOTSTRAP_ADMIN_PASSWORD` from a
 secret manager on the very first start, or pipe the start logs to a place
