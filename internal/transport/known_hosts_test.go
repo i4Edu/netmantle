@@ -111,8 +111,7 @@ func TestExplicitHostKeyCallbackHonoured(t *testing.T) {
 // use in tests.
 func mustGenerateTestHostKey(t *testing.T) ssh.Signer {
 	t.Helper()
-	// Use golang.org/x/crypto/ssh to generate a test key.
-	// We use RSA for broad compatibility in tests.
+	// Use Ed25519 for test host keys.
 	_, priv, err := generateTestEd25519Key()
 	if err != nil {
 		t.Fatalf("generate test key: %v", err)

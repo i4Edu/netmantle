@@ -324,7 +324,15 @@ func resolveHostKeyCallback(ctx context.Context, cfg SSHConfig) ssh.HostKeyCallb
 	if store == nil {
 		store = NewMemKnownHostsStore()
 	}
+	// Determine the authoritative port for key pinning.
+	// If cfg.Address already contains an explicit port (e.g. "10.0.0.1:830")
+	// use that; otherwise fall back to cfg.Port or the SSH default (22).
 	port := cfg.Port
+	if _, portStr, err := net.SplitHostPort(cfg.Address); err == nil {
+		if p, perr := net.LookupPort("tcp", portStr); perr == nil && p > 0 {
+			port = p
+		}
+	}
 	if port == 0 {
 		port = 22
 	}

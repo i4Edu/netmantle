@@ -112,9 +112,15 @@ func (s *Service) CreateChannel(ctx context.Context, tenantID int64, name, kind 
 			}
 			raw["url_envelope"] = env
 			delete(raw, "url")
-			cfg, _ = json.Marshal(raw)
+			var merr error
+			cfg, merr = json.Marshal(raw)
+			if merr != nil {
+				return Channel{}, fmt.Errorf("notify: marshal webhook config: %w", merr)
+			}
 		}
-		if raw["url_envelope"] == nil {
+		// Validate that url_envelope is a non-empty string.
+		envStr, _ := raw["url_envelope"].(string)
+		if envStr == "" {
 			return Channel{}, errors.New("notify: webhook/slack config requires url")
 		}
 	case "email":

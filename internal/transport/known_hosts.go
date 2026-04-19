@@ -70,15 +70,45 @@ func (s *DBKnownHostsStore) Check(tenantID int64, host string, port int, algo st
 }
 
 // Add pins the key. If the same (tenant,host,port,algorithm) already exists
-// with the same key, the call is a no-op.
+// with a different key, ErrKeyChanged is returned. If it exists with the
+// same key, the call is a no-op.
 func (s *DBKnownHostsStore) Add(ctx context.Context, tenantID int64, host string, port int, algo string, key []byte) error {
 	encoded := base64.StdEncoding.EncodeToString(key)
-	_, err := s.DB.ExecContext(ctx,
+	result, err := s.DB.ExecContext(ctx,
 		`INSERT INTO ssh_known_hosts(tenant_id, host, port, algorithm, public_key, added_at)
          VALUES(?, ?, ?, ?, ?, ?)
          ON CONFLICT(tenant_id, host, port, algorithm) DO NOTHING`,
 		tenantID, host, port, algo, encoded, time.Now().UTC().Format(time.RFC3339))
-	return err
+	if err != nil {
+		return fmt.Errorf("transport/ssh: known-hosts insert: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("transport/ssh: known-hosts insert rows affected: %w", err)
+	}
+	if rowsAffected > 0 {
+		// New pin recorded successfully.
+		return nil
+	}
+	// Conflict: the (tenant, host, port, algorithm) tuple already exists.
+	// Verify the stored key matches to detect concurrent key-rotation races.
+	var stored string
+	err = s.DB.QueryRowContext(ctx,
+		`SELECT public_key FROM ssh_known_hosts
+         WHERE tenant_id=? AND host=? AND port=? AND algorithm=?`,
+		tenantID, host, port, algo,
+	).Scan(&stored)
+	if err == sql.ErrNoRows {
+		// Extremely unlikely race (row deleted between insert and select).
+		return ErrUnknownHost
+	}
+	if err != nil {
+		return fmt.Errorf("transport/ssh: known-hosts lookup after conflict: %w", err)
+	}
+	if stored != encoded {
+		return ErrKeyChanged
+	}
+	return nil
 }
 
 // MemKnownHostsStore is an in-process KnownHostsStore used when no DB is
@@ -128,10 +158,20 @@ func (m *MemKnownHostsStore) Add(_ context.Context, tenantID int64, host string,
 // knownHostsCallback builds an ssh.HostKeyCallback that consults store.
 // On ErrUnknownHost (first connection) the key is pinned via store.Add.
 // On ErrKeyChanged the dial is rejected.
-func knownHostsCallback(ctx context.Context, tenantID int64, port int, store KnownHostsStore) ssh.HostKeyCallback {
+// If store.Add fails (e.g. DB unavailable), the connection is also rejected
+// to avoid silently operating without key pinning on persistent stores.
+func knownHostsCallback(ctx context.Context, tenantID int64, defaultPort int, store KnownHostsStore) ssh.HostKeyCallback {
 	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
-		host, _, err := net.SplitHostPort(hostname)
-		if err != nil {
+		// Prefer the actual port from `hostname` (which may be "host:port")
+		// over the default so non-standard ports are pinned correctly.
+		host, portStr, err := net.SplitHostPort(hostname)
+		port := defaultPort
+		if err == nil {
+			if p, perr := net.LookupPort("tcp", portStr); perr == nil && p > 0 {
+				port = p
+			}
+		} else {
+			// hostname has no port component.
 			host = hostname
 		}
 		algo := key.Type()
@@ -141,11 +181,11 @@ func knownHostsCallback(ctx context.Context, tenantID int64, port int, store Kno
 		case nil:
 			return nil
 		case ErrUnknownHost:
-			// TOFU: accept and pin on first use.
+			// TOFU: accept and pin on first use. If persisting the pin fails
+			// (e.g. DB unavailable), reject the connection so the operator
+			// is alerted rather than silently downgrading back to TOFU.
 			if aerr := store.Add(ctx, tenantID, host, port, algo, raw); aerr != nil {
-				// Failing to persist the pin is non-fatal but logged by
-				// the caller; the connection is still allowed this time.
-				_ = aerr
+				return fmt.Errorf("transport/ssh: failed to pin host key for %s:%d: %w", host, port, aerr)
 			}
 			return nil
 		case ErrKeyChanged:

@@ -683,15 +683,24 @@ func (s *server) handleTopology(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Select the latest probe run per device using a CTE so the LIMIT
+	// applies to distinct devices, not to probe_runs rows. This prevents
+	// a chatty device with many recent runs from crowding out other devices.
 	rows, err := db.QueryContext(r.Context(), `
+        WITH latest AS (
+            SELECT pr.device_id, MAX(pr.id) AS max_id
+            FROM probe_runs pr
+            JOIN probes p ON p.id = pr.probe_id
+            WHERE p.tenant_id = ? AND p.name = 'neighbors'
+              AND pr.created_at >= ?
+            GROUP BY pr.device_id
+            LIMIT ?
+        )
         SELECT d.hostname, pr.output
-        FROM probe_runs pr
-        JOIN probes p ON p.id = pr.probe_id
-        JOIN devices d ON d.id = pr.device_id
-        WHERE p.tenant_id = ? AND p.name = 'neighbors'
-          AND pr.created_at >= ?
-        ORDER BY pr.created_at DESC
-        LIMIT ?`, u.TenantID,
+        FROM latest l
+        JOIN probe_runs pr ON pr.id = l.max_id
+        JOIN devices d ON d.id = pr.device_id`,
+		u.TenantID,
 		time.Now().UTC().Add(-7*24*time.Hour).Format(time.RFC3339),
 		limit)
 	if err != nil {

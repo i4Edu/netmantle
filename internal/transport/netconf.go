@@ -149,38 +149,63 @@ func DialNetconf(ctx context.Context, cfg NetconfConfig) (*NetconfSession, func(
 // handshake sends our hello and consumes the device's hello.
 func (s *NetconfSession) handshake(ctx context.Context) error {
 	// Send our capabilities hello.
-	if _, err := io.WriteString(s.stdin, netconfpkg.HelloMessage+"\n"); err != nil {
+	// HelloMessage already ends with the ]]>]]> framing marker; do not
+	// append extra bytes that a strict server might interpret as message data.
+	if _, err := io.WriteString(s.stdin, netconfpkg.HelloMessage); err != nil {
 		return fmt.Errorf("send hello: %w", err)
 	}
-	// Read and discard the device hello — we only need the ]]>]]> delimiter
-	// to know the hello is complete.
+	// Read and discard the device hello. We use a goroutine so that context
+	// cancellation and the session timeout can abort the blocking Read call.
+	return s.readUntilDelimiter(ctx, "]]>]]>", "hello timeout")
+}
+
+// readUntilDelimiter reads from stdout until delimiter is found or the
+// timeout/context fires. The blocking Read is run in a goroutine so that
+// ctx.Done() and the session timeout can interrupt it promptly.
+func (s *NetconfSession) readUntilDelimiter(ctx context.Context, delim, timeoutMsg string) error {
+	type chunk struct {
+		data []byte
+		err  error
+	}
+
+	timer := time.NewTimer(s.timeout)
+	defer timer.Stop()
+
 	buf := make([]byte, 0, 4096)
-	tmp := make([]byte, 1024)
-	deadline := time.Now().Add(s.timeout)
 	for {
-		if time.Now().After(deadline) {
-			return fmt.Errorf("hello timeout")
-		}
+		ch := make(chan chunk, 1)
+		go func() {
+			tmp := make([]byte, 1024)
+			n, err := s.stdout.Read(tmp)
+			if n > 0 {
+				c := make([]byte, n)
+				copy(c, tmp[:n])
+				ch <- chunk{data: c, err: err}
+				return
+			}
+			ch <- chunk{err: err}
+		}()
+
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		default:
-		}
-		n, err := s.stdout.Read(tmp)
-		if n > 0 {
-			buf = append(buf, tmp[:n]...)
-			if strings.Contains(string(buf), "]]>]]>") {
-				return nil
+		case <-timer.C:
+			return fmt.Errorf("%s", timeoutMsg)
+		case c := <-ch:
+			if len(c.data) > 0 {
+				buf = append(buf, c.data...)
+				if strings.Contains(string(buf), delim) {
+					return nil
+				}
 			}
-		}
-		if err != nil {
-			if err == io.EOF {
-				break
+			if c.err != nil {
+				if c.err == io.EOF {
+					return fmt.Errorf("connection closed before %q", delim)
+				}
+				return c.err
 			}
-			return err
 		}
 	}
-	return fmt.Errorf("connection closed before hello complete")
 }
 
 // Run interprets cmd as a NETCONF datastore selector and returns the
@@ -188,9 +213,9 @@ func (s *NetconfSession) handshake(ctx context.Context) error {
 //
 // Supported commands:
 //
-//	"get-config:running"   – retrieve the running datastore (default)
-//	"get-config:candidate" – retrieve the candidate datastore
-//	"get-config"           – shorthand for "get-config:running"
+// "get-config:running"   – retrieve the running datastore (default)
+// "get-config:candidate" – retrieve the candidate datastore
+// "get-config"           – shorthand for "get-config:running"
 func (s *NetconfSession) Run(ctx context.Context, cmd string) (string, error) {
 	cmd = strings.TrimSpace(cmd)
 
@@ -214,31 +239,50 @@ func (s *NetconfSession) Run(ctx context.Context, cmd string) (string, error) {
 		return "", fmt.Errorf("transport/netconf: send rpc: %w", err)
 	}
 
-	// Read the full reply, bounded by ]]>]]>.
+	// Read the full reply, bounded by ]]>]]>. The blocking Read runs in a
+	// goroutine so the timeout and context cancellation can interrupt it.
+	type chunk struct {
+		data []byte
+		err  error
+	}
+
+	timer := time.NewTimer(s.timeout)
+	defer timer.Stop()
+
 	buf := make([]byte, 0, 16384)
-	tmp := make([]byte, 4096)
-	deadline := time.Now().Add(s.timeout)
+loop:
 	for {
-		if time.Now().After(deadline) {
-			return "", fmt.Errorf("transport/netconf: reply timeout")
-		}
+		ch := make(chan chunk, 1)
+		go func() {
+			tmp := make([]byte, 4096)
+			n, err := s.stdout.Read(tmp)
+			if n > 0 {
+				c := make([]byte, n)
+				copy(c, tmp[:n])
+				ch <- chunk{data: c, err: err}
+				return
+			}
+			ch <- chunk{err: err}
+		}()
+
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
-		default:
-		}
-		n, err := s.stdout.Read(tmp)
-		if n > 0 {
-			buf = append(buf, tmp[:n]...)
-			if strings.Contains(string(buf), "]]>]]>") {
-				break
+		case <-timer.C:
+			return "", fmt.Errorf("transport/netconf: reply timeout")
+		case c := <-ch:
+			if len(c.data) > 0 {
+				buf = append(buf, c.data...)
+				if strings.Contains(string(buf), "]]>]]>") {
+					break loop
+				}
 			}
-		}
-		if err != nil {
-			if err == io.EOF {
-				break
+			if c.err != nil {
+				if c.err == io.EOF {
+					break loop
+				}
+				return "", fmt.Errorf("transport/netconf: read reply: %w", c.err)
 			}
-			return "", fmt.Errorf("transport/netconf: read reply: %w", err)
 		}
 	}
 

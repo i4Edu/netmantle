@@ -28,3 +28,46 @@ func TestParseRPCReply(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+// TestParseRPCReplyNamespace verifies that ParseRPCReply handles namespace-
+// qualified <data> elements as returned by real RFC 6242-compliant devices.
+func TestParseRPCReplyNamespace(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name: "namespace on data element",
+			input: `<?xml version="1.0"?>` +
+				`<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">` +
+				`<data xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">` +
+				`<config><hostname>router1</hostname></config>` +
+				`</data></rpc-reply>` + "]]>]]>",
+			want: "router1",
+		},
+		{
+			name:  "no namespace (plain)",
+			input: `<rpc-reply><data><config><hostname>r2</hostname></config></data></rpc-reply>` + "]]>]]>",
+			want:  "r2",
+		},
+		{
+			name: "namespace prefix",
+			input: `<nc:rpc-reply xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0">` +
+				`<nc:data><config><hostname>r3</hostname></config></nc:data>` +
+				`</nc:rpc-reply>` + "]]>]]>",
+			want: "r3",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := ParseRPCReply(tc.input)
+			if err != nil {
+				t.Fatalf("ParseRPCReply: %v", err)
+			}
+			if !strings.Contains(body, tc.want) {
+				t.Errorf("body %q does not contain %q", body, tc.want)
+			}
+		})
+	}
+}

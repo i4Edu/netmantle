@@ -37,13 +37,11 @@
 //   go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
 //   go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
 //
-//   # Regenerate:
-//   buf generate
-//   # or:
+//   # Regenerate from the repository root:
 //   protoc --go_out=. --go-grpc_out=. internal/poller/proto/poller.proto
 //
-// Generated files go to internal/poller/pollerv1/ and are committed.
-// Do not hand-edit generated files.
+// Generated Go files are written according to the go_package option declared
+// below (internal/poller/pollerv1). Do not hand-edit generated files.
 
 syntax = "proto3";
 

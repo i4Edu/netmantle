@@ -34,9 +34,9 @@ type Service struct {
 	NewSession  SessionFactory
 
 	// NetconfSession, when non-nil, is used for devices whose driver name
-	// starts with "cisco_netconf", "junos_netconf", "restconf", or "gnmi".
-	// It receives the same (ctx, device, user, pass) arguments and must
-	// return a drivers.Session that understands NETCONF/RESTCONF/gNMI
+	// exactly matches one of: "cisco_netconf", "junos_netconf", "restconf",
+	// or "gnmi". It receives the same (ctx, device, user, pass) arguments
+	// and must return a drivers.Session that understands NETCONF/RESTCONF/gNMI
 	// command semantics (e.g. "get-config:running").
 	// When nil, the NETCONF/RESTCONF/gNMI stub error is preserved.
 	NetconfSession SessionFactory

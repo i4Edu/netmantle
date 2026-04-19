@@ -33,19 +33,19 @@ const (
 
 // Job is a unit of work dispatched from the core to a remote poller.
 type Job struct {
-	ID             int64     `json:"id"`
-	TenantID       int64     `json:"tenant_id"`
-	PollerID       *int64    `json:"poller_id,omitempty"`
-	IdempotencyKey string    `json:"idempotency_key"`
-	DeviceID       int64     `json:"device_id"`
-	JobType        JobType   `json:"job_type"`
-	Payload        string    `json:"payload,omitempty"` // JSON
-	Status         JobStatus `json:"status"`
+	ID             int64      `json:"id"`
+	TenantID       int64      `json:"tenant_id"`
+	PollerID       *int64     `json:"poller_id,omitempty"`
+	IdempotencyKey string     `json:"idempotency_key"`
+	DeviceID       int64      `json:"device_id"`
+	JobType        JobType    `json:"job_type"`
+	Payload        string     `json:"payload,omitempty"` // JSON
+	Status         JobStatus  `json:"status"`
 	ClaimedAt      *time.Time `json:"claimed_at,omitempty"`
 	CompletedAt    *time.Time `json:"completed_at,omitempty"`
-	Result         string    `json:"result,omitempty"` // JSON
-	Error          string    `json:"error,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
+	Result         string     `json:"result,omitempty"` // JSON
+	Error          string     `json:"error,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
 	ExpiresAt      *time.Time `json:"expires_at,omitempty"`
 }
 
@@ -67,7 +67,9 @@ func (s *JobService) Enqueue(ctx context.Context, tenantID, deviceID int64, jobT
 	}
 	if idempotencyKey == "" {
 		b := make([]byte, 16)
-		_, _ = rand.Read(b)
+		if _, err := rand.Read(b); err != nil {
+			return Job{}, fmt.Errorf("poller: generate idempotency key: %w", err)
+		}
 		idempotencyKey = hex.EncodeToString(b)
 	}
 
@@ -129,14 +131,35 @@ func (s *JobService) Claim(ctx context.Context, tenantID, pollerID int64, suppor
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := s.DB.ExecContext(ctx,
-		`UPDATE poller_jobs SET status='claimed', poller_id=?, claimed_at=?
-         WHERE id=? AND tenant_id=? AND status='queued'`,
-		pollerID, now, jobID, tenantID)
+		`UPDATE poller_jobs
+         SET status='claimed',
+             poller_id=?,
+             claimed_at=?,
+             expires_at=CASE
+                 WHEN expires_at IS NULL OR created_at IS NULL THEN expires_at
+                 ELSE strftime(
+                     '%Y-%m-%dT%H:%M:%SZ',
+                     datetime(
+                         ?,
+                         printf(
+                             '+%d seconds',
+                             CAST(strftime('%s', expires_at) AS INTEGER) - CAST(strftime('%s', created_at) AS INTEGER)
+                         )
+                     )
+                 )
+             END
+         WHERE id=? AND tenant_id=? AND status='queued'
+           AND EXISTS (
+               SELECT 1 FROM pollers
+               WHERE id=? AND tenant_id=?
+           )`,
+		pollerID, now, now, jobID, tenantID, pollerID, tenantID)
 	if err != nil {
 		return Job{}, fmt.Errorf("poller: claim update: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		// Another poller raced us; no job available.
+		// Another poller raced us, the job is no longer queued, or the poller
+		// does not belong to this tenant; no job available.
 		return Job{}, sql.ErrNoRows
 	}
 	return s.Get(ctx, tenantID, jobID)
@@ -231,11 +254,11 @@ type scanner interface {
 
 func scanJob(s scanner) (Job, error) {
 	var (
-		j                           Job
-		pollerID                    sql.NullInt64
-		claimedAt, completedAt      sql.NullString
-		expiresAt                   sql.NullString
-		createdAt                   string
+		j                      Job
+		pollerID               sql.NullInt64
+		claimedAt, completedAt sql.NullString
+		expiresAt              sql.NullString
+		createdAt              string
 	)
 	if err := s.Scan(
 		&j.ID, &j.TenantID, &pollerID, &j.IdempotencyKey, &j.DeviceID,
@@ -250,17 +273,30 @@ func scanJob(s scanner) (Job, error) {
 		v := pollerID.Int64
 		j.PollerID = &v
 	}
-	j.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+	createdTime, err := time.Parse(time.RFC3339, createdAt)
+	if err != nil {
+		return Job{}, fmt.Errorf("parse created_at %q: %w", createdAt, err)
+	}
+	j.CreatedAt = createdTime
 	if claimedAt.Valid {
-		t, _ := time.Parse(time.RFC3339, claimedAt.String)
+		t, err := time.Parse(time.RFC3339, claimedAt.String)
+		if err != nil {
+			return Job{}, fmt.Errorf("parse claimed_at %q: %w", claimedAt.String, err)
+		}
 		j.ClaimedAt = &t
 	}
 	if completedAt.Valid {
-		t, _ := time.Parse(time.RFC3339, completedAt.String)
+		t, err := time.Parse(time.RFC3339, completedAt.String)
+		if err != nil {
+			return Job{}, fmt.Errorf("parse completed_at %q: %w", completedAt.String, err)
+		}
 		j.CompletedAt = &t
 	}
 	if expiresAt.Valid {
-		t, _ := time.Parse(time.RFC3339, expiresAt.String)
+		t, err := time.Parse(time.RFC3339, expiresAt.String)
+		if err != nil {
+			return Job{}, fmt.Errorf("parse expires_at %q: %w", expiresAt.String, err)
+		}
 		j.ExpiresAt = &t
 	}
 	return j, nil

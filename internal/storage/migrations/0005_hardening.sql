@@ -3,11 +3,15 @@
 -- Migration notes
 -- ---------------
 -- ssh_known_hosts: new table; no existing data affected.
---   Rollback: revert this migration file; no data migration needed.
+--   Rollback: migrations are append-only and cannot be reversed by editing
+--   this file after it has been applied. To undo: restore from a pre-migration
+--   backup, or ship a new follow-up migration/PR that drops this table.
+--   No data transform is required — dropping the table is sufficient.
 --   Every row carries tenant_id so cross-tenant isolation is preserved.
 --
 -- poller_jobs: new table; no existing data affected.
---   Rollback: revert this migration file; no data migration needed.
+--   Rollback: same as ssh_known_hosts — restore from backup or ship a
+--   follow-up migration/PR that drops this table. No data migration needed.
 --   idempotency_key is unique across the whole table (not per-tenant) so
 --   callers can use a UUID that embeds the tenant ID in the key string.
 
