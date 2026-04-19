@@ -1,0 +1,41 @@
+# Example NetMantle configuration.
+# All values may also be set via NETMANTLE_* environment variables (see docs).
+
+server:
+  # Address the HTTP server listens on.
+  address: ":8080"
+  # Read/write timeouts.
+  read_timeout: "30s"
+  write_timeout: "30s"
+
+database:
+  # Driver: sqlite (default) or postgres (planned).
+  driver: "sqlite"
+  # SQLite DSN. Relative paths are resolved against the working directory.
+  dsn: "data/netmantle.db"
+
+storage:
+  # Directory where per-device git repositories are created.
+  config_repo_root: "data/configs"
+
+security:
+  # Master passphrase used to derive the credential KEK.
+  # In production set this via NETMANTLE_SECURITY_MASTER_PASSPHRASE.
+  master_passphrase: "change-me-in-production-please"
+  # Cookie name and signing key for sessions. Auto-generated if empty.
+  session_cookie: "netmantle_session"
+  session_key: ""
+  # Session lifetime.
+  session_ttl: "24h"
+
+logging:
+  # debug | info | warn | error
+  level: "info"
+  # text | json
+  format: "json"
+
+backup:
+  # Default per-device backup timeout.
+  timeout: "60s"
+  # Maximum concurrent backup workers.
+  workers: 4

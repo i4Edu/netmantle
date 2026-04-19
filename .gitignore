@@ -1,0 +1,27 @@
+# Binaries
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# Local data
+/data/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite-journal
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Coverage
+coverage.out
+coverage.html
+
+# Environment
+.env
+.env.local

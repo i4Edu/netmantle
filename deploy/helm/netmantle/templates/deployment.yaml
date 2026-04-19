@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "netmantle.fullname" . }}
+  labels: {{- include "netmantle.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels: {{- include "netmantle.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "netmantle.selectorLabels" . | nindent 8 }}
+    spec:
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: netmantle
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["serve"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: NETMANTLE_SECURITY_MASTER_PASSPHRASE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "netmantle.fullname" . }}-secrets
+                  key: master-passphrase
+            - name: NETMANTLE_DATABASE_DRIVER
+              value: {{ .Values.database.driver | quote }}
+            - name: NETMANTLE_DATABASE_DSN
+              value: {{ .Values.database.dsn | quote }}
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+          securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/netmantle
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "netmantle.fullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}

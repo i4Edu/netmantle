@@ -1,0 +1,11 @@
+apiVersion: v2
+name: netmantle
+description: Self-hosted Network Configuration Management & automation platform
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/i4Edu/netmantle
+sources:
+  - https://github.com/i4Edu/netmantle
+maintainers:
+  - name: NetMantle contributors

@@ -1,0 +1,52 @@
+replicaCount: 2
+
+image:
+  repository: ghcr.io/i4edu/netmantle
+  tag: ""           # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  hosts:
+    - host: netmantle.example.com
+      paths: ["/"]
+  tls: []
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# Master passphrase for the credential envelope encryption KEK. In
+# production, source this from a Secret and override via --set or values.
+masterPassphrase: "change-me"
+
+# DSN for the metadata DB. The current build supports only sqlite, so
+# keep `database.driver` set to `sqlite` and point `dsn` at a path on a
+# persistent volume. Postgres support is tracked in docs/roadmap.md.
+database:
+  driver: sqlite
+  dsn: /var/lib/netmantle/netmantle.db
+
+persistence:
+  enabled: true
+  size: 5Gi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  fsGroup: 65532
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]

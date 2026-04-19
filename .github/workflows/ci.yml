@@ -1,0 +1,29 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+          cache: true
+      - name: Verify go.mod is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+      - name: Lint (gofmt + go vet)
+        run: make lint
+      - name: Test
+        run: make test
+      - name: Build
+        run: make build

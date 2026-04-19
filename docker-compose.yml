@@ -1,0 +1,16 @@
+version: "3.9"
+
+services:
+  netmantle:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      NETMANTLE_SECURITY_MASTER_PASSPHRASE: "change-me-locally"
+      NETMANTLE_BOOTSTRAP_ADMIN_PASSWORD: "admin-please-change"
+      NETMANTLE_LOGGING_FORMAT: "text"
+    volumes:
+      - netmantle-data:/var/lib/netmantle
+
+volumes:
+  netmantle-data:
