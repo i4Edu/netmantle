@@ -40,13 +40,30 @@
 
 <!-- ===== login (only shown when not authenticated) ===== -->
 <section id="login-view">
-  <h2>Sign in</h2>
+  <div class="login-brand">
+    <span class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 7l8-4 8 4-8 4-8-4z"/>
+        <path d="M4 12l8 4 8-4"/>
+        <path d="M4 17l8 4 8-4"/>
+      </svg>
+    </span>
+    <div>
+      <h2>Sign in to NetMantle</h2>
+      <p class="login-tagline">Self-hosted network configuration management.</p>
+    </div>
+  </div>
   <form id="login-form">
     <label>Username <input name="username" required autocomplete="username"></label>
     <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
     <button type="submit">Log in</button>
   </form>
   <p id="login-error" class="error"></p>
+  <p class="login-hint muted">
+    First start? The bootstrap admin password is printed once in the server log,
+    or pre-seeded via <code>NETMANTLE_BOOTSTRAP_ADMIN_PASSWORD</code>.
+  </p>
 </section>
 
 <!-- ===== main shell (sidebar + view) ===== -->

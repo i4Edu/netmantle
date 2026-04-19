@@ -46,16 +46,18 @@ build step, no third-party CSS); see
 [docs/ui-style-guide.md](docs/ui-style-guide.md) for the design tokens
 and [docs/user-guide.md](docs/user-guide.md) for step-by-step walkthroughs.
 
-> The screenshots below were captured against the previous theme and are
-> pending a refresh against the current one. Section descriptions already
-> match the current UI.
+> The screenshots below were captured against the current theme. Sections
+> that haven't been refreshed yet (Backups, Topology, Approvals, Device
+> detail, Prometheus metrics) are marked inline.
 
 ### Sign-in
 
 The bootstrap admin password is printed once on first start, or pre-seeded via
-`NETMANTLE_BOOTSTRAP_ADMIN_PASSWORD`.
+`NETMANTLE_BOOTSTRAP_ADMIN_PASSWORD`. The sign-in card now carries the
+brand mark, a tagline, and a hint pointing to the bootstrap-password
+environment variable.
 
-![Sign-in screen](https://github.com/user-attachments/assets/799a59e0-4728-4795-8b3e-efa979405802)
+![Sign-in screen](https://github.com/user-attachments/assets/6621033a-3e16-449d-95e1-18ae6e02a75c)
 
 ### Dashboard
 
@@ -65,12 +67,14 @@ queue, status-by-driver bars, drift hotspots, a recent-events timeline, and a
 pollers/git-mirror health card. All sections are best-effort — a sub-query
 failure zeroes that field but the response stays 200.
 
-![Dashboard with stat tiles, status-by-driver bars, recent events, and health card](https://github.com/user-attachments/assets/2f412ddd-db30-4c21-9a76-cdeaadf4923d)
+![Dashboard with stat tiles, status-by-driver bars, recent events, and health card](https://github.com/user-attachments/assets/a54c9c19-7b6e-410a-96b3-dedd1bf1f376)
 
 ### Empty dashboard (first login)
 
 Two-pane Inventory layout: the left rail lists devices and exposes the
 **Add device** and **Add credential** forms; the right pane shows device detail.
+
+> Pending a refresh against the current theme.
 
 ![Empty dashboard after first login](https://github.com/user-attachments/assets/50200d85-ac6d-4f03-ae93-56568e3ffc80)
 
@@ -81,12 +85,14 @@ The driver dropdown is populated dynamically from the registered drivers
 MikroTik RouterOS, Nokia SR OS, Huawei VRP, FortiOS, Palo Alto PAN-OS,
 gNMI, RESTCONF, generic SSH, and several ONT/OLT drivers — BDCOM, DBC, VSOL).
 
-![Devices list with Add device form expanded](https://github.com/user-attachments/assets/e313d2fa-3f1f-4787-9add-9ca233aa0510)
+![Devices list with Add device form expanded](https://github.com/user-attachments/assets/c91da805-748a-4505-80d4-fb49e1618af7)
 
 ### Device detail
 
 Clicking a device shows the latest stored configuration, recent run history,
 and **Backup now** / **Delete** controls.
+
+> Pending a refresh against the current theme.
 
 ![Device detail pane](https://github.com/user-attachments/assets/3b0b6939-0ad1-4dcc-8c01-b81183cce93c)
 
@@ -95,6 +101,8 @@ and **Backup now** / **Delete** controls.
 Recent change events are listed on the left; clicking one shows the unified
 diff and a **Mark reviewed** action.
 
+> Pending a refresh against the current theme.
+
 ![Backups view with diff pane](https://github.com/user-attachments/assets/99260c71-3ead-4bb0-9fb4-9320c0ba660c)
 
 ### Compliance
@@ -102,12 +110,14 @@ diff and a **Mark reviewed** action.
 Define rules (`must_include`, `must_exclude`, `regex`, `ordered_block`) with
 severities, and review findings produced when backups are evaluated.
 
-![Compliance rules table](https://github.com/user-attachments/assets/f1802cca-4055-4184-b7eb-946012b4d36f)
+![Compliance rules table](https://github.com/user-attachments/assets/9d7461c5-2a23-41ed-a465-546928797978)
 
 ### Approvals
 
 Change requests for push jobs flow through `draft → submitted → approved →
 applied`, with reviewer notes captured on each transition.
+
+> Pending a refresh against the current theme.
 
 ![Approvals queue](https://github.com/user-attachments/assets/87733faa-6ce0-40d2-8f03-4ee3fbbe6a9b)
 
@@ -116,6 +126,8 @@ applied`, with reviewer notes captured on each transition.
 LLDP/CDP neighbour reports stored as `neighbors` probe runs are merged into a
 deduplicated link list. A graph canvas renderer is tracked as follow-up work.
 
+> Pending a refresh against the current theme.
+
 ![Topology nodes and links table](https://github.com/user-attachments/assets/a0eaa505-7565-4034-90e2-5f5779c20f44)
 
 ### Audit log
@@ -123,14 +135,14 @@ deduplicated link list. A graph canvas renderer is tracked as follow-up work.
 A filterable view of every state-changing API call, including the actor,
 source (`ui` / `api` / `scheduler` / `poller` / `system`), action, and target.
 
-![Audit log with filters](https://github.com/user-attachments/assets/7c38c33b-243f-4c65-aece-8029f2b51427)
+![Audit log with filters](https://github.com/user-attachments/assets/e75a46f8-3170-4fb4-b8fe-f7b65c8f3ccb)
 
 ### Settings
 
 Tenants, API tokens, notification channels and rules, and registered pollers
 are each listed in a dedicated card.
 
-![Settings cards](https://github.com/user-attachments/assets/627ef38a-3f78-47a3-9b04-c53923632f42)
+![Settings cards](https://github.com/user-attachments/assets/41e43169-a890-4aba-9041-fe0c1d2eccf0)
 
 ### Prometheus metrics
 
