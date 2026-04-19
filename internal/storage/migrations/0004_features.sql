@@ -66,7 +66,7 @@ CREATE INDEX IF NOT EXISTS idx_change_request_events_cr
 
 -- Phase E — API tokens for billing/provisioning integrations.
 --
--- Tokens are presented as `Bearer <prefix>.<secret>`; the secret half is
+-- Tokens are presented as `nmt_<prefix>_<secret>`; the secret half is
 -- bcrypted at rest. `prefix` is an indexable lookup key; a constant-time
 -- bcrypt compare against `secret_hash` provides authentication. Scopes
 -- are a comma-separated list (e.g. "device:read,changereq:approve").

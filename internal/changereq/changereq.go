@@ -148,8 +148,9 @@ func (s *Service) Create(ctx context.Context, cr ChangeRequest) (ChangeRequest, 
 	case KindRollback:
 		if cr.DeviceID == nil || *cr.DeviceID <= 0 ||
 			strings.TrimSpace(cr.Artifact) == "" ||
-			strings.TrimSpace(cr.TargetSHA) == "" {
-			return ChangeRequest{}, fmt.Errorf("%w: device_id, artifact and target_sha required for kind=rollback", ErrInvalidInput)
+			strings.TrimSpace(cr.TargetSHA) == "" ||
+			strings.TrimSpace(cr.Payload) == "" {
+			return ChangeRequest{}, fmt.Errorf("%w: device_id, artifact, target_sha and payload required for kind=rollback", ErrInvalidInput)
 		}
 	default:
 		return ChangeRequest{}, fmt.Errorf("%w: unknown kind %q", ErrInvalidInput, cr.Kind)
@@ -257,9 +258,12 @@ func (s *Service) Cancel(ctx context.Context, tenantID, id, actorID int64, reaso
 }
 
 // MarkApplied is called by the executor after a successful Apply.
-// `result` carries the executor's combined output.
+// `result` carries the executor's combined output, which is persisted
+// to `change_requests.result`. The state-transition event records only
+// a concise marker so the events table stays small even when the
+// executor produces large output.
 func (s *Service) MarkApplied(ctx context.Context, tenantID, id int64, result string) (ChangeRequest, error) {
-	cr, err := s.transition(ctx, tenantID, id, 0, StatusApplied, result)
+	cr, err := s.transition(ctx, tenantID, id, 0, StatusApplied, "apply succeeded")
 	if err != nil {
 		return ChangeRequest{}, err
 	}
@@ -272,9 +276,11 @@ func (s *Service) MarkApplied(ctx context.Context, tenantID, id int64, result st
 	return cr, nil
 }
 
-// MarkFailed records a failed apply.
+// MarkFailed records a failed apply. The full reason is stored on the
+// request row; the event log only carries a short marker (see
+// MarkApplied for rationale).
 func (s *Service) MarkFailed(ctx context.Context, tenantID, id int64, reason string) (ChangeRequest, error) {
-	cr, err := s.transition(ctx, tenantID, id, 0, StatusFailed, reason)
+	cr, err := s.transition(ctx, tenantID, id, 0, StatusFailed, "apply failed")
 	if err != nil {
 		return ChangeRequest{}, err
 	}

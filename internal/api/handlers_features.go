@@ -7,12 +7,14 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/i4Edu/netmantle/internal/apitokens"
 	"github.com/i4Edu/netmantle/internal/auth"
+	"github.com/i4Edu/netmantle/internal/backup"
 	"github.com/i4Edu/netmantle/internal/changereq"
 )
 
@@ -77,14 +79,30 @@ func (s *server) userFromAPIToken(ctx context.Context, t apitokens.Token) *auth.
 		u    auth.User
 		role string
 	)
+	// Match on both id AND tenant_id so a stale/cross-tenant token can
+	// never authenticate as a user from a different tenant if the DB
+	// becomes inconsistent (e.g. after a partial restore).
 	if err := db.QueryRowContext(ctx,
-		`SELECT id, tenant_id, username, role FROM users WHERE id=?`,
-		t.OwnerUserID,
+		`SELECT id, tenant_id, username, role FROM users WHERE id=? AND tenant_id=?`,
+		t.OwnerUserID, t.TenantID,
 	).Scan(&u.ID, &u.TenantID, &u.Username, &role); err != nil {
 		return nil
 	}
 	u.Role = auth.Role(role)
 	return &u
+}
+
+// decodeOptionalJSON decodes a request body that is allowed to be empty
+// (e.g. POST endpoints that accept a body but don't require one). It
+// returns nil for an empty body, but any other decode error (malformed
+// JSON, unknown fields, oversize body) is propagated so the handler can
+// reject the request with 400 instead of silently treating it as empty.
+func decodeOptionalJSON(r *http.Request, v any) error {
+	err := decodeJSON(r, v)
+	if err == nil || errors.Is(err, io.EOF) {
+		return nil
+	}
+	return err
 }
 
 func bearerFromHeader(r *http.Request) string {
@@ -240,7 +258,11 @@ func (s *server) handleGetChangeRequest(w http.ResponseWriter, r *http.Request) 
 		s.changeReqError(w, err)
 		return
 	}
-	events, _ := s.ChangeReq.Events(r.Context(), cr.ID)
+	events, err := s.ChangeReq.Events(r.Context(), cr.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load change request events")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"request": cr, "events": events})
 }
 
@@ -266,7 +288,10 @@ func (s *server) handleApproveChangeRequest(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var in changeRequestDecisionInput
-	_ = decodeJSON(r, &in)
+	if err := decodeOptionalJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	allowSelf := u.Role == auth.RoleAdmin
 	cr, err := s.ChangeReq.Approve(r.Context(), u.TenantID, id, u.ID, in.Reason, allowSelf)
 	if err != nil {
@@ -284,7 +309,10 @@ func (s *server) handleRejectChangeRequest(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var in changeRequestDecisionInput
-	_ = decodeJSON(r, &in)
+	if err := decodeOptionalJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	cr, err := s.ChangeReq.Reject(r.Context(), u.TenantID, id, u.ID, in.Reason)
 	if err != nil {
 		s.changeReqError(w, err)
@@ -301,7 +329,10 @@ func (s *server) handleCancelChangeRequest(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var in changeRequestDecisionInput
-	_ = decodeJSON(r, &in)
+	if err := decodeOptionalJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	cr, err := s.ChangeReq.Get(r.Context(), u.TenantID, id)
 	if err != nil {
 		s.changeReqError(w, err)
@@ -362,6 +393,14 @@ func (s *server) applyChangeRequest(r *http.Request, cr changereq.ChangeRequest)
 	case changereq.KindPush:
 		if s.Automation == nil || cr.PushJobID == nil {
 			return "", errors.New("push automation not available")
+		}
+		// Automation.Run executes the persisted push job and does not
+		// accept per-change-request variable overrides. Refuse to apply
+		// a request that carries variable snapshots we cannot honor,
+		// rather than silently applying different inputs than the
+		// approver reviewed.
+		if len(cr.Variables) > 0 {
+			return "", errors.New("push change request variable overrides are not supported by apply")
 		}
 		results, err := s.Automation.Run(r.Context(), cr.TenantID, *cr.PushJobID, 4)
 		if err != nil {
@@ -456,7 +495,11 @@ func (s *server) handleRollbackDevice(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err := s.Backup.ReadVersion(r.Context(), u.TenantID, devID, in.Artifact, in.TargetSHA)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "historical config not found: "+err.Error())
+		if errors.Is(err, backup.ErrVersionNotFound) {
+			writeError(w, http.StatusNotFound, "historical config not found")
+		} else {
+			writeError(w, http.StatusInternalServerError, "failed to read historical config")
+		}
 		return
 	}
 	devIDCopy := devID

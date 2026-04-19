@@ -252,6 +252,12 @@ func (s *Service) LatestVersion(ctx context.Context, tenantID, deviceID int64, a
 	return body, sha, nil
 }
 
+// ErrVersionNotFound is returned by ReadVersion when the requested
+// (device, artifact, sha) tuple is not present in the version history.
+// Callers (e.g. the rollback API handler) use this to distinguish
+// "not found" from internal failures and respond with 404 vs 500.
+var ErrVersionNotFound = errors.New("backup: version not found")
+
 // ReadVersion returns the content of a previously committed artifact at
 // a specific commit SHA. It is the read side of the rollback workflow:
 // the API surface uses it to render a diff against the live config and
@@ -261,6 +267,9 @@ func (s *Service) LatestVersion(ctx context.Context, tenantID, deviceID int64, a
 // arbitrary git refs are not accepted, both because the configstore
 // repo holds only flat snapshots and to keep the audit trail honest
 // (a rollback target is always something we previously captured).
+//
+// Returns ErrVersionNotFound when no row matches; other errors are
+// store/DB failures and should be surfaced as 500-class.
 func (s *Service) ReadVersion(ctx context.Context, tenantID, deviceID int64, artifact, sha string) ([]byte, error) {
 	if artifact == "" || sha == "" {
 		return nil, errors.New("backup: artifact and sha required")
@@ -273,7 +282,7 @@ func (s *Service) ReadVersion(ctx context.Context, tenantID, deviceID int64, art
 		return nil, err
 	}
 	if n == 0 {
-		return nil, fmt.Errorf("backup: version not found for device=%d artifact=%s sha=%s", deviceID, artifact, sha)
+		return nil, ErrVersionNotFound
 	}
 	return s.Store.Read(tenantID, deviceID, artifact, sha)
 }

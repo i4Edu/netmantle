@@ -162,15 +162,17 @@ func (r *Repo) Reveal(ctx context.Context, tenantID, id int64) (username, secret
 
 // Use is the preferred entry point for any caller that needs the
 // cleartext secret. It decrypts the secret, hands it together with the
-// username to fn, zeroises the local plaintext copy on return, and
-// records the access in `credentials.last_used_at` so accountability
+// username to fn, zeroises the local plaintext byte slice on return,
+// and records the access in `credentials.last_used_at` so accountability
 // queries can show when a credential was last redeemed and by whom
 // (callers wanting actor attribution should also write an audit_log
 // row at the same call site).
 //
-// fn must not retain references to either string after it returns. The
-// implementation reuses the underlying byte slice and zeroises it before
-// Use exits; retained references would be observed as zero bytes.
+// fn must not retain or log the secret after it returns. The local
+// decrypted byte slice is zeroised before Use exits, but the secret is
+// passed to fn as a Go string, which is a separate immutable copy and
+// cannot be zeroised by Use; minimising the lifetime of that string
+// (and any derivatives) inside fn is the caller's responsibility.
 func (r *Repo) Use(ctx context.Context, tenantID, id int64, fn func(username, secret string) error) error {
 	var (
 		username string

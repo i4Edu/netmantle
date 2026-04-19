@@ -212,10 +212,14 @@ func NewServer(d Deps) http.Handler {
 	}
 
 	// API tokens for machine-to-machine integrations (Phase E).
+	// Issuance and revocation are admin-only: a token may carry the
+	// `apply:direct` scope (which lets handleRunPushGuarded bypass the
+	// approval workflow), so allowing operators to mint tokens would
+	// let them grant themselves direct-apply privileges.
 	if d.APITokens != nil {
 		mux.Handle("GET /api/v1/api-tokens", s.auth(s.handleListAPITokens))
-		mux.Handle("POST /api/v1/api-tokens", s.auth(s.requireWrite(s.handleCreateAPIToken)))
-		mux.Handle("DELETE /api/v1/api-tokens/{id}", s.auth(s.requireWrite(s.handleDeleteAPIToken)))
+		mux.Handle("POST /api/v1/api-tokens", s.auth(s.requireAdmin(s.handleCreateAPIToken)))
+		mux.Handle("DELETE /api/v1/api-tokens/{id}", s.auth(s.requireAdmin(s.handleDeleteAPIToken)))
 	}
 
 	// Embedded UI (single-page).

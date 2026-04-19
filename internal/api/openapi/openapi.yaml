@@ -21,6 +21,7 @@ servers:
   - url: /api/v1
 security:
   - cookieAuth: []
+  - bearerAuth: []
 paths:
   /auth/login:
     post:
