@@ -610,6 +610,10 @@ pre.config {
   gap: var(--space-3);
   align-items: center;
 }
+.topo-wrap .topo-stats {
+  left: auto;
+  right: var(--space-2);
+}
 .topo-wrap .legend .dot {
   display: inline-block;
   width: 8px; height: 8px;

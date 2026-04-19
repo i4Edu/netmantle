@@ -853,6 +853,12 @@ views.topology = async (root) => {
   try { data = await api('GET', '/topology'); }
   catch (e) { root.appendChild(errorState('Error: ' + e.message)); return; }
   const links = (data && data.links) || [];
+  const nodeCount = Number.isFinite(data && data.node_count) ? data.node_count : (() => {
+    const set = new Set();
+    for (const l of links) { set.add(l.a); set.add(l.b); }
+    return set.size;
+  })();
+  const edgeCount = Number.isFinite(data && data.edge_count) ? data.edge_count : links.length;
   if (!links.length) {
     root.appendChild(emptyState('No topology links recorded yet — install LLDP/CDP probes to populate this view.'));
     return;
@@ -884,6 +890,11 @@ views.topology = async (root) => {
     el('span', {}, el('span', { class: 'dot', style: 'background:var(--status-bad)' }), 'violation'),
     el('span', {}, el('span', { class: 'dot', style: 'background:var(--text-muted)' }), 'unknown'));
   wrap.appendChild(legend);
+  const stats = el('div', { class: 'legend topo-stats' },
+    el('span', {}, `${nodeCount} devices`),
+    el('span', {}, `${edgeCount} links`),
+  );
+  wrap.appendChild(stats);
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', '0 0 1000 540');
   wrap.appendChild(svg);

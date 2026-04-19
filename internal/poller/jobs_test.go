@@ -2,6 +2,7 @@ package poller_test
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -251,5 +252,56 @@ func TestClaimExpiresAtRecalculated(t *testing.T) {
 	if newExpiry.Before(expectedMin) || newExpiry.After(expectedMax) {
 		t.Fatalf("new expires_at %v not in expected range [%v, %v]",
 			newExpiry, expectedMin, expectedMax)
+	}
+}
+
+func TestJobClaimRejectsCrossTenantPoller(t *testing.T) {
+	svc, done := newJobService(t)
+	defer done()
+	seedTenant(t, svc, 1)
+	seedTenant(t, svc, 2)
+	seedDevice(t, svc, 1, 10)
+	// Poller belongs to tenant 2, queue entry belongs to tenant 1.
+	seedPoller(t, svc, 2, 42, "p-x")
+
+	if _, err := svc.Enqueue(context.Background(), 1, 10, poller.JobTypeBackup, "", "cross-tenant-claim", 0); err != nil {
+		t.Fatal(err)
+	}
+	_, err := svc.Claim(context.Background(), 1, 42, nil)
+	if err == nil {
+		t.Fatal("expected claim failure for cross-tenant poller")
+	}
+	if err != sql.ErrNoRows {
+		t.Fatalf("expected sql.ErrNoRows, got %v", err)
+	}
+}
+
+func TestJobCompleteClaimedByRequiresOwningPoller(t *testing.T) {
+	svc, done := newJobService(t)
+	defer done()
+	seedTenant(t, svc, 1)
+	seedDevice(t, svc, 1, 10)
+	seedPoller(t, svc, 1, 5, "p5")
+	seedPoller(t, svc, 1, 6, "p6")
+
+	job, err := svc.Enqueue(context.Background(), 1, 10, poller.JobTypeBackup, "", "complete-owned", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Claim(context.Background(), 1, 5, nil); err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	if err := svc.CompleteClaimedBy(context.Background(), 1, 6, job.ID, true, `{"ok":true}`, ""); err != sql.ErrNoRows {
+		t.Fatalf("expected sql.ErrNoRows for non-owner poller, got %v", err)
+	}
+	if err := svc.CompleteClaimedBy(context.Background(), 1, 5, job.ID, true, `{"ok":true}`, ""); err != nil {
+		t.Fatalf("CompleteClaimedBy: %v", err)
+	}
+	got, err := svc.Get(context.Background(), 1, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != poller.JobDone {
+		t.Fatalf("status: want done got %s", got.Status)
 	}
 }

@@ -279,3 +279,34 @@ func TestHuaweiVRP(t *testing.T) {
 		t.Errorf("payload missing sysname: %q", arts[0].Content)
 	}
 }
+
+func TestModelDrivenDrivers(t *testing.T) {
+	cases := []struct {
+		driver string
+		art    string
+	}{
+		{driver: "restconf", art: "restconf-running"},
+		{driver: "gnmi", art: "gnmi-running"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.driver, func(t *testing.T) {
+			d, err := drivers.Get(tc.driver)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sess := fakesession.New(map[string]string{
+				"get-config:running": "<data><system><hostname>edge01</hostname></system></data>",
+			})
+			arts, err := d.FetchConfig(context.Background(), sess)
+			if err != nil {
+				t.Fatalf("FetchConfig: %v", err)
+			}
+			if len(arts) != 1 || arts[0].Name != tc.art {
+				t.Fatalf("unexpected artifacts: %+v", arts)
+			}
+			if !strings.Contains(string(arts[0].Content), "<hostname>edge01</hostname>") {
+				t.Fatalf("missing payload in %q", arts[0].Content)
+			}
+		})
+	}
+}

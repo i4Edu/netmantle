@@ -205,6 +205,28 @@ func (s *JobService) Complete(ctx context.Context, tenantID, jobID int64, succes
 	return err
 }
 
+// CompleteClaimedBy marks a claimed/running job as done or failed, but only
+// when the current owner is pollerID inside the same tenant.
+// It returns sql.ErrNoRows when the job is not currently owned by pollerID.
+func (s *JobService) CompleteClaimedBy(ctx context.Context, tenantID, pollerID, jobID int64, success bool, resultJSON, errMsg string) error {
+	status := string(JobDone)
+	if !success {
+		status = string(JobFailed)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := s.DB.ExecContext(ctx,
+		`UPDATE poller_jobs SET status=?, result=?, error=?, completed_at=?
+         WHERE tenant_id=? AND id=? AND poller_id=? AND status IN ('claimed','running')`,
+		status, nullIfEmptyJob(resultJSON), nullIfEmptyJob(errMsg), now, tenantID, jobID, pollerID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 // Cancel marks a queued or claimed job as cancelled.
 func (s *JobService) Cancel(ctx context.Context, tenantID, jobID int64) error {
 	_, err := s.DB.ExecContext(ctx,
