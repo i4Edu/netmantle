@@ -46,7 +46,8 @@ func TestWireAuthenticateClaimAndReport(t *testing.T) {
 		t.Fatal("expected refresh deadline in the future")
 	}
 
-	enq, err := jobs.Enqueue(context.Background(), 1, 10, poller.JobTypeBackup, "{}", "wire-flow", time.Minute)
+	const emptyPayloadJSON = "{}"
+	enq, err := jobs.Enqueue(context.Background(), 1, 10, poller.JobTypeBackup, emptyPayloadJSON, "wire-flow", time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}

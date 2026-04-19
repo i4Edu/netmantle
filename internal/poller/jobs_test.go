@@ -267,11 +267,7 @@ func TestJobClaimRejectsCrossTenantPoller(t *testing.T) {
 	if _, err := svc.Enqueue(context.Background(), 1, 10, poller.JobTypeBackup, "", "cross-tenant-claim", 0); err != nil {
 		t.Fatal(err)
 	}
-	_, err := svc.Claim(context.Background(), 1, 42, nil)
-	if err == nil {
-		t.Fatal("expected claim failure for cross-tenant poller")
-	}
-	if err != sql.ErrNoRows {
+	if _, err := svc.Claim(context.Background(), 1, 42, nil); err != sql.ErrNoRows {
 		t.Fatalf("expected sql.ErrNoRows, got %v", err)
 	}
 }

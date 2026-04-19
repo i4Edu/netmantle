@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"path/filepath"
 	"testing"
@@ -142,7 +143,7 @@ func openKnownHostsDB(t *testing.T, dsn string) *DBKnownHostsStore {
 func seedTenantRow(t *testing.T, store *DBKnownHostsStore, tenantID int64) {
 	t.Helper()
 	_, err := store.DB.Exec(`INSERT OR IGNORE INTO tenants(id, name, created_at) VALUES(?, ?, ?)`,
-		tenantID, "tenant", time.Now().UTC().Format(time.RFC3339))
+		tenantID, fmt.Sprintf("tenant-%d", tenantID), time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
 		t.Fatalf("seed tenant: %v", err)
 	}

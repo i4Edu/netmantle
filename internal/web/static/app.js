@@ -846,6 +846,12 @@ views.compliance = async (root) => {
   await renderFindings();
 };
 
+function topologyNodeCountFromLinks(links) {
+  const set = new Set();
+  for (const l of links) { set.add(l.a); set.add(l.b); }
+  return set.size;
+}
+
 // ---------- Topology (interactive SVG canvas with hand-rolled force layout) ----------
 views.topology = async (root) => {
   root.appendChild(el('h2', {}, 'Topology'));
@@ -853,12 +859,8 @@ views.topology = async (root) => {
   try { data = await api('GET', '/topology'); }
   catch (e) { root.appendChild(errorState('Error: ' + e.message)); return; }
   const links = (data && data.links) || [];
-  const nodeCount = Number.isFinite(data && data.node_count) ? data.node_count : (() => {
-    const set = new Set();
-    for (const l of links) { set.add(l.a); set.add(l.b); }
-    return set.size;
-  })();
-  const edgeCount = Number.isFinite(data && data.edge_count) ? data.edge_count : links.length;
+  const nodeCount = Number.isFinite(data?.node_count) ? data.node_count : topologyNodeCountFromLinks(links);
+  const linkCount = Number.isFinite(data?.edge_count) ? data.edge_count : links.length;
   if (!links.length) {
     root.appendChild(emptyState('No topology links recorded yet — install LLDP/CDP probes to populate this view.'));
     return;
@@ -892,7 +894,7 @@ views.topology = async (root) => {
   wrap.appendChild(legend);
   const stats = el('div', { class: 'legend topo-stats' },
     el('span', {}, `${nodeCount} devices`),
-    el('span', {}, `${edgeCount} links`),
+    el('span', {}, `${linkCount} links`),
   );
   wrap.appendChild(stats);
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');

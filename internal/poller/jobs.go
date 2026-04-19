@@ -216,8 +216,9 @@ func (s *JobService) CompleteClaimedBy(ctx context.Context, tenantID, pollerID, 
 	now := time.Now().UTC().Format(time.RFC3339)
 	res, err := s.DB.ExecContext(ctx,
 		`UPDATE poller_jobs SET status=?, result=?, error=?, completed_at=?
-         WHERE tenant_id=? AND id=? AND poller_id=? AND status IN ('claimed','running')`,
-		status, nullIfEmptyJob(resultJSON), nullIfEmptyJob(errMsg), now, tenantID, jobID, pollerID)
+         WHERE tenant_id=? AND id=? AND poller_id=? AND status IN (?, ?)`,
+		status, nullIfEmptyJob(resultJSON), nullIfEmptyJob(errMsg), now,
+		tenantID, jobID, pollerID, string(JobClaimed), string(JobRunning))
 	if err != nil {
 		return err
 	}
