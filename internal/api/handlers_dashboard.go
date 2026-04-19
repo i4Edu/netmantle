@@ -10,6 +10,8 @@ import (
 
 	"github.com/i4Edu/netmantle/internal/audit"
 	"github.com/i4Edu/netmantle/internal/changereq"
+	"github.com/i4Edu/netmantle/internal/compliance"
+	"github.com/i4Edu/netmantle/internal/devices"
 )
 
 // dashboardSummary is the response body for GET /api/v1/dashboard/summary.
@@ -79,116 +81,117 @@ func (s *server) handleDashboardSummary(w http.ResponseWriter, r *http.Request) 
 	out := dashboardSummary{}
 	now := time.Now().UTC()
 
-	// Devices total + recent.
+	// Always return stable-shape 14-element sparkline arrays so the JSON
+	// contract holds even when the DB type assertion below fails or the
+	// dependency is unwired in tests.
+	out.Compliance.Sparkline14d = make([]float64, 14)
+	out.Backups.Sparkline14d = make([]float64, 14)
+
+	// Fetch devices and findings once; reuse across all sections.
+	var devs []devices.Device
 	if s.Devices != nil {
-		devs, err := s.Devices.ListDevices(ctx, u.TenantID)
-		if err == nil {
-			out.Devices.Total = len(devs)
-			cutoff := now.AddDate(0, 0, -7)
-			for _, d := range devs {
-				if d.CreatedAt.After(cutoff) {
-					out.Devices.AddedRecent++
-				}
-			}
-			// Status-by-driver tallies (compliance overlay below).
-			byDriver := map[string]*driverStatus{}
-			for _, d := range devs {
-				if byDriver[d.Driver] == nil {
-					byDriver[d.Driver] = &driverStatus{Driver: d.Driver}
-				}
-				byDriver[d.Driver].Total++
-			}
-			// Mark devices as compliant unless they have a failing finding.
-			fails := map[int64]int{}
-			if s.Compliance != nil {
-				findings, err := s.Compliance.ListFindings(ctx, u.TenantID)
-				if err == nil {
-					for _, f := range findings {
-						if f.Status == "fail" {
-							fails[f.DeviceID]++
-						}
-					}
-				}
-			}
-			for _, d := range devs {
-				if fails[d.ID] == 0 {
-					byDriver[d.Driver].Compliant++
-				}
-			}
-			for _, ds := range byDriver {
-				if ds.Total > 0 {
-					ds.Percent = (ds.Compliant * 100) / ds.Total
-				}
-				out.StatusByDriver = append(out.StatusByDriver, *ds)
-			}
-			sort.Slice(out.StatusByDriver, func(i, j int) bool {
-				return out.StatusByDriver[i].Total > out.StatusByDriver[j].Total
-			})
+		if d, err := s.Devices.ListDevices(ctx, u.TenantID); err == nil {
+			devs = d
+		}
+	}
+	var findings []compliance.Finding
+	if s.Compliance != nil {
+		if f, err := s.Compliance.ListFindings(ctx, u.TenantID); err == nil {
+			findings = f
 		}
 	}
 
-	// Compliance current %.
-	if s.Compliance != nil {
-		findings, err := s.Compliance.ListFindings(ctx, u.TenantID)
-		if err == nil {
-			perDevice := map[int64]int{}
-			for _, f := range findings {
-				switch f.Status {
-				case "pass":
-					out.Compliance.PassCount++
-				case "fail":
-					out.Compliance.FailCount++
-					perDevice[f.DeviceID]++
-				}
+	// Devices total + recent + status-by-driver tallies.
+	if devs != nil {
+		out.Devices.Total = len(devs)
+		cutoff := now.AddDate(0, 0, -7)
+		byDriver := map[string]*driverStatus{}
+		for _, d := range devs {
+			if d.CreatedAt.After(cutoff) {
+				out.Devices.AddedRecent++
 			}
-			total := out.Compliance.PassCount + out.Compliance.FailCount
-			if total > 0 {
-				out.Compliance.Percent = (float64(out.Compliance.PassCount) * 100.0) / float64(total)
+			if byDriver[d.Driver] == nil {
+				byDriver[d.Driver] = &driverStatus{Driver: d.Driver}
 			}
-			// Drift hotspots (top 5 by failing-rule count).
-			type kv struct {
-				id    int64
-				count int
+			byDriver[d.Driver].Total++
+		}
+		// Mark devices as compliant unless they have a failing finding.
+		fails := map[int64]int{}
+		for _, f := range findings {
+			if f.Status == "fail" {
+				fails[f.DeviceID]++
 			}
-			arr := make([]kv, 0, len(perDevice))
-			for id, c := range perDevice {
-				arr = append(arr, kv{id, c})
+		}
+		for _, d := range devs {
+			if fails[d.ID] == 0 {
+				byDriver[d.Driver].Compliant++
 			}
-			sort.Slice(arr, func(i, j int) bool { return arr[i].count > arr[j].count })
-			if len(arr) > 5 {
-				arr = arr[:5]
+		}
+		for _, ds := range byDriver {
+			if ds.Total > 0 {
+				ds.Percent = (ds.Compliant * 100) / ds.Total
 			}
-			// Look up hostnames once.
-			hostByID := map[int64]string{}
-			if s.Devices != nil {
-				devs, err := s.Devices.ListDevices(ctx, u.TenantID)
-				if err == nil {
-					for _, d := range devs {
-						hostByID[d.ID] = d.Hostname
-					}
-				}
+			out.StatusByDriver = append(out.StatusByDriver, *ds)
+		}
+		sort.Slice(out.StatusByDriver, func(i, j int) bool {
+			return out.StatusByDriver[i].Total > out.StatusByDriver[j].Total
+		})
+	}
+
+	// Compliance current % + drift hotspots (reuse `findings` and `devs`).
+	if findings != nil {
+		perDevice := map[int64]int{}
+		for _, f := range findings {
+			switch f.Status {
+			case "pass":
+				out.Compliance.PassCount++
+			case "fail":
+				out.Compliance.FailCount++
+				perDevice[f.DeviceID]++
 			}
-			// Build "top detail" string from the first failing finding per device.
-			detailByID := map[int64]string{}
-			for _, f := range findings {
-				if f.Status != "fail" {
-					continue
-				}
-				if _, ok := detailByID[f.DeviceID]; ok {
-					continue
-				}
-				if f.Detail != "" {
-					detailByID[f.DeviceID] = f.Detail
-				}
+		}
+		total := out.Compliance.PassCount + out.Compliance.FailCount
+		if total > 0 {
+			out.Compliance.Percent = (float64(out.Compliance.PassCount) * 100.0) / float64(total)
+		}
+		// Drift hotspots (top 5 by failing-rule count).
+		type kv struct {
+			id    int64
+			count int
+		}
+		arr := make([]kv, 0, len(perDevice))
+		for id, c := range perDevice {
+			arr = append(arr, kv{id, c})
+		}
+		sort.Slice(arr, func(i, j int) bool { return arr[i].count > arr[j].count })
+		if len(arr) > 5 {
+			arr = arr[:5]
+		}
+		// Reuse the device list already fetched at the top of the handler.
+		hostByID := map[int64]string{}
+		for _, d := range devs {
+			hostByID[d.ID] = d.Hostname
+		}
+		// Build "top detail" string from the first failing finding per device.
+		detailByID := map[int64]string{}
+		for _, f := range findings {
+			if f.Status != "fail" {
+				continue
 			}
-			for _, e := range arr {
-				out.DriftHotspots = append(out.DriftHotspots, driftHotspot{
-					DeviceID:  e.id,
-					Hostname:  hostByID[e.id],
-					Failing:   e.count,
-					TopDetail: detailByID[e.id],
-				})
+			if _, ok := detailByID[f.DeviceID]; ok {
+				continue
 			}
+			if f.Detail != "" {
+				detailByID[f.DeviceID] = f.Detail
+			}
+		}
+		for _, e := range arr {
+			out.DriftHotspots = append(out.DriftHotspots, driftHotspot{
+				DeviceID:  e.id,
+				Hostname:  hostByID[e.id],
+				Failing:   e.count,
+				TopDetail: detailByID[e.id],
+			})
 		}
 	}
 

@@ -103,29 +103,61 @@ func (s *server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 // in a spreadsheet-friendly form. The column set matches the Audit page so
 // "what you see is what you export". Times are emitted as RFC3339Nano so the
 // CSV round-trips losslessly back into filters.
+//
+// User-controlled string fields are sanitised against CSV/spreadsheet
+// formula injection (cells beginning with `=`, `+`, `-` or `@` get a
+// leading apostrophe so Excel/Sheets treat them as literal text).
 func writeAuditCSV(w http.ResponseWriter, rows []audit.Entry) {
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	w.Header().Set("Content-Disposition",
 		fmt.Sprintf(`attachment; filename="netmantle-audit-%s.csv"`,
 			time.Now().UTC().Format("20060102-150405")))
 	cw := csv.NewWriter(w)
-	defer cw.Flush()
-	_ = cw.Write([]string{
+	if err := cw.Write([]string{
 		"id", "created_at", "tenant_id", "actor_user_id",
 		"source", "action", "target", "request_id", "detail",
-	})
+	}); err != nil {
+		http.Error(w, "failed to write csv", http.StatusInternalServerError)
+		return
+	}
 	for _, e := range rows {
-		_ = cw.Write([]string{
+		if err := cw.Write([]string{
 			strconv.FormatInt(e.ID, 10),
 			e.CreatedAt.UTC().Format(time.RFC3339Nano),
 			int64Ptr(e.TenantID),
 			int64Ptr(e.ActorUserID),
-			e.Source,
-			e.Action,
-			e.Target,
-			e.RequestID,
-			e.Detail,
-		})
+			sanitizeCSVCell(e.Source),
+			sanitizeCSVCell(e.Action),
+			sanitizeCSVCell(e.Target),
+			sanitizeCSVCell(e.RequestID),
+			sanitizeCSVCell(e.Detail),
+		}); err != nil {
+			http.Error(w, "failed to write csv", http.StatusInternalServerError)
+			return
+		}
+	}
+	cw.Flush()
+	if err := cw.Error(); err != nil {
+		http.Error(w, "failed to write csv", http.StatusInternalServerError)
+		return
+	}
+}
+
+// sanitizeCSVCell defends against CSV/spreadsheet formula injection by
+// prefixing user-controlled values that start with one of `=`, `+`, `-`,
+// `@` (or a tab/CR which some apps treat as a continuation of the prior
+// cell) with a single apostrophe. Excel and Sheets render the cell as
+// literal text in that case. The original value still round-trips for
+// machine consumers that re-parse the CSV.
+func sanitizeCSVCell(v string) string {
+	if v == "" {
+		return v
+	}
+	switch v[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + v
+	default:
+		return v
 	}
 }
 

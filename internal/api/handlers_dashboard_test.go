@@ -106,11 +106,11 @@ func TestAuditCSVExport(t *testing.T) {
 	}
 }
 
-// TestAuditCSVExportEmpty verifies that even when no audit service is wired
-// (e.g. in a misconfigured test) the CSV branch returns headers, not JSON.
+// TestAuditCSVHeaderShapeWithService verifies that the CSV branch always
+// returns the column header row even when the result set is empty (here
+// forced via an action filter that no row will match), so client tools
+// don't crash on a zero-byte response.
 func TestAuditCSVHeaderShapeWithService(t *testing.T) {
-	// Reuse the standard server (which has audit) and request an extreme
-	// filter so we get an empty result set.
 	srv, pw := newTestServer(t)
 	defer srv.Close()
 	c := login(t, srv, pw)

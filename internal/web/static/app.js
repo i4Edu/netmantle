@@ -266,21 +266,28 @@ async function renderDeviceCards(devices) {
     if (f.status === 'pass') passByDev[f.device_id] = (passByDev[f.device_id] || 0) + 1;
     if (f.status === 'fail') failByDev[f.device_id] = (failByDev[f.device_id] || 0) + 1;
   }
+
+  // Fan out the per-device "last successful backup" lookups in parallel so
+  // card rendering does not block on N sequential network round-trips.
+  const lastBackupByDev = {};
+  await Promise.all(devices.map(async (d) => {
+    try {
+      const runs = await api('GET', `/devices/${d.id}/runs`);
+      const ok = (runs || []).find((r) => r.status === 'success');
+      if (ok) lastBackupByDev[d.id] = relativeTime(new Date(ok.started_at));
+    } catch (_) { /* ignore */ }
+  }));
+
   for (const d of devices) {
     const fails = failByDev[d.id] || 0;
     const passes = passByDev[d.id] || 0;
     const evaluated = fails + passes;
     const score = evaluated > 0 ? Math.round((passes * 100) / evaluated) : null;
-    const { cls, label: status } = complianceStatus(fails, evaluated > 0);
-
-    // Last backup: pull from runs in a separate request per card. Cheap at
-    // small scale, batchable later via a new endpoint if needed.
-    let lastBackup = '—';
-    try {
-      const runs = await api('GET', `/devices/${d.id}/runs`);
-      const ok = (runs || []).find((r) => r.status === 'success');
-      if (ok) lastBackup = relativeTime(new Date(ok.started_at));
-    } catch (_) { /* ignore */ }
+    // Pass `ruleCount > 0` (not `evaluated > 0`) so a device that has not
+    // yet been evaluated still classifies as "compliant" when rules exist
+    // — matches the topology overlay's contract.
+    const { cls, label: status } = complianceStatus(fails, ruleCount > 0);
+    const lastBackup = lastBackupByDev[d.id] || '—';
 
     const card = el('div', { class: 'card device-card', 'data-id': d.id },
       el('div', { class: 'row' },
@@ -670,12 +677,29 @@ function renderTwoPaneDiff(text) {
     dels = []; adds = [];
   };
 
+  // Only treat lines as file/diff headers before we've seen the first hunk.
+  // Once inside a hunk, a `-` or `+` prefix is a real diff line and a `---`
+  // (or `+++`) at column 0 within a config could be legitimate content
+  // (e.g. ASCII separator banners on Cisco IOS) — skipping it would silently
+  // drop config text from the rendered view.
+  let inHunk = false;
   for (const ln of lines) {
-    if (ln.startsWith('---') || ln.startsWith('+++') || ln.startsWith('diff ') || ln.startsWith('index ')) {
-      // file headers — skip in the rendered view
+    if (!inHunk && (
+        /^--- (a\/|\/dev\/null|"a\/)/.test(ln) ||
+        /^\+\+\+ (b\/|\/dev\/null|"b\/)/.test(ln) ||
+        ln.startsWith('diff --git ') ||
+        ln.startsWith('diff -') ||
+        ln.startsWith('index ') ||
+        ln.startsWith('Binary files ') ||
+        ln.startsWith('similarity index ') ||
+        ln.startsWith('rename ') ||
+        ln.startsWith('new file mode ') ||
+        ln.startsWith('deleted file mode '))) {
+      // pre-hunk file/diff headers — skip in the rendered view
       continue;
     }
     if (ln.startsWith('@@')) {
+      inHunk = true;
       flush();
       // Parse "@@ -a,b +c,d @@" to reset line counters.
       const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(ln);
@@ -684,9 +708,10 @@ function renderTwoPaneDiff(text) {
       row(right, 'hunk', '', ln);
       continue;
     }
-    if (ln.startsWith('+')) { adds.push(ln.slice(1)); continue; }
-    if (ln.startsWith('-')) { dels.push(ln.slice(1)); continue; }
-    // context line (or empty)
+    if (inHunk && ln.startsWith('+')) { adds.push(ln.slice(1)); continue; }
+    if (inHunk && ln.startsWith('-')) { dels.push(ln.slice(1)); continue; }
+    if (!inHunk) continue; // any other pre-hunk noise
+    // context line (or empty) inside a hunk
     flush();
     const ctx = ln.startsWith(' ') ? ln.slice(1) : ln;
     row(left,  '', ++lnA, ctx);
@@ -836,12 +861,19 @@ views.topology = async (root) => {
   let devices = [], findings = [];
   try { devices = await api('GET', '/devices'); } catch (_) {}
   try { findings = await api('GET', '/compliance/findings'); } catch (_) {}
+  // Fetch rule count once so the helper agrees with the Inventory cards.
+  const ruleCount = await safeCount('/compliance/rules');
+  const hasRules = ruleCount > 0;
   const failsByHost = {};
   const devByHost = {};
-  for (const d of devices) devByHost[d.hostname] = d;
+  const devByID = {};
+  for (const d of devices) {
+    devByHost[d.hostname] = d;
+    devByID[d.id] = d;
+  }
   for (const f of (findings || [])) {
     if (f.status !== 'fail') continue;
-    const dev = devices.find((x) => x.id === f.device_id);
+    const dev = devByID[f.device_id];
     if (dev) failsByHost[dev.hostname] = (failsByHost[dev.hostname] || 0) + 1;
   }
 
@@ -932,18 +964,18 @@ views.topology = async (root) => {
     circle.setAttribute('r', 10);
     const f = failsByHost[n.name] || 0;
     let cls = 'unknown';
-    if (devByHost[n.name]) cls = complianceStatus(f, true).cls;
+    if (devByHost[n.name]) cls = complianceStatus(f, hasRules).cls;
     circle.setAttribute('class', cls);
     const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
     t.setAttribute('y', 24);
     t.textContent = n.name;
     g.append(circle, t);
-    g.addEventListener('click', () => showTopologyNode(n.name, devByHost[n.name], failsByHost[n.name] || 0));
+    g.addEventListener('click', () => showTopologyNode(n.name, devByHost[n.name], failsByHost[n.name] || 0, hasRules));
     svg.appendChild(g);
   }
 };
 
-function showTopologyNode(name, device, fails) {
+function showTopologyNode(name, device, fails, hasRules) {
   const side = $('#topo-side');
   if (!side) return;
   side.hidden = false;
@@ -956,7 +988,7 @@ function showTopologyNode(name, device, fails) {
   }
   side.appendChild(el('p', { class: 'muted' },
     `${device.driver} • ${device.address}:${device.port}`));
-  const { cls, label: status } = complianceStatus(fails, true);
+  const { cls, label: status } = complianceStatus(fails, hasRules);
   side.appendChild(el('p', {}, el('span', { class: 'badge ' + cls }, status),
     ' ', String(fails) + ' failing rule' + (fails === 1 ? '' : 's')));
   const open = el('button', { class: 'btn' }, 'Open device →');

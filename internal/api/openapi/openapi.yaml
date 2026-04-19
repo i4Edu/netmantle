@@ -187,6 +187,7 @@ paths:
         - {in: query, name: user,   schema: {type: integer, format: int64}, description: Actor user id (exact)}
         - {in: query, name: action, schema: {type: string},                description: 'Action key, exact (e.g. device.create)'}
         - {in: query, name: target, schema: {type: string},                description: 'Substring match on target (e.g. device:42)'}
+        - {in: query, name: request_id, schema: {type: string},            description: 'Exact match on the request id (correlates a UI action across multiple audit rows)'}
         - {in: query, name: since,  schema: {type: string, format: date-time}, description: RFC3339 lower bound (inclusive)}
         - {in: query, name: until,  schema: {type: string, format: date-time}, description: RFC3339 upper bound (inclusive)}
         - {in: query, name: limit,  schema: {type: integer, default: 100, maximum: 500}}
