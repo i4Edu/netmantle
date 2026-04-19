@@ -24,6 +24,11 @@ func init() {
 	drivers.Register(&vsolOS{})
 	drivers.Register(&dbcOS{})
 	drivers.Register(&genericSSH{})
+	// New vendor drivers (hardened CLI backup path).
+	drivers.Register(&fortiosDriver{})
+	drivers.Register(&paloaltoPANOS{})
+	drivers.Register(&huaweiVRP{})
+	// Scaffolded transport stubs.
 	drivers.Register(&netconfStub{name: "cisco_netconf"})
 	drivers.Register(&netconfStub{name: "junos_netconf"})
 	drivers.Register(&netconfStub{name: "restconf"})
@@ -293,5 +298,69 @@ func (dbcOS) FetchConfig(ctx context.Context, s drivers.Session) ([]drivers.Conf
 	}
 	return []drivers.ConfigArtifact{
 		{Name: "running-config", Content: []byte(stripIOSChrome(running))},
+	}, nil
+}
+
+// fortiosDriver implements Fortinet FortiOS backup via `show full-configuration`.
+// The CLI pager is suppressed via `config system console` before the main
+// command so that long configs are not truncated by --More-- prompts.
+type fortiosDriver struct{}
+
+func (fortiosDriver) Name() string { return "fortios" }
+
+func (fortiosDriver) FetchConfig(ctx context.Context, s drivers.Session) ([]drivers.ConfigArtifact, error) {
+	// Disable the terminal pager for the session. Non-fatal: some read-only
+	// accounts or locked-down versions do not allow console reconfiguration.
+	_, _ = s.Run(ctx, "config system console")
+	_, _ = s.Run(ctx, "set output standard")
+	_, _ = s.Run(ctx, "end")
+
+	out, err := s.Run(ctx, "show full-configuration")
+	if err != nil {
+		return nil, fmt.Errorf("fortios: show full-configuration: %w", err)
+	}
+	return []drivers.ConfigArtifact{
+		{Name: "running-config", Content: []byte(strings.TrimRight(out, "\n") + "\n")},
+	}, nil
+}
+
+// paloaltoPANOS implements Palo Alto Networks PAN-OS backup.
+// Paging is turned off with `set cli pager off` before the main dump.
+type paloaltoPANOS struct{}
+
+func (paloaltoPANOS) Name() string { return "paloalto_panos" }
+
+func (paloaltoPANOS) FetchConfig(ctx context.Context, s drivers.Session) ([]drivers.ConfigArtifact, error) {
+	// Turn off the CLI pager so long configurations are not interrupted.
+	if _, err := s.Run(ctx, "set cli pager off"); err != nil {
+		return nil, fmt.Errorf("paloalto_panos: set cli pager off: %w", err)
+	}
+	out, err := s.Run(ctx, "show config running")
+	if err != nil {
+		return nil, fmt.Errorf("paloalto_panos: show config running: %w", err)
+	}
+	return []drivers.ConfigArtifact{
+		{Name: "running-config", Content: []byte(strings.TrimRight(out, "\n") + "\n")},
+	}, nil
+}
+
+// huaweiVRP implements Huawei VRP (Versatile Routing Platform) backup.
+// Paging is disabled temporarily with `screen-length 0 temporary`; the
+// full running configuration is captured via `display current-configuration`.
+type huaweiVRP struct{}
+
+func (huaweiVRP) Name() string { return "huawei_vrp" }
+
+func (huaweiVRP) FetchConfig(ctx context.Context, s drivers.Session) ([]drivers.ConfigArtifact, error) {
+	// Disable paging for this session only (does not persist across logins).
+	if _, err := s.Run(ctx, "screen-length 0 temporary"); err != nil {
+		return nil, fmt.Errorf("huawei_vrp: screen-length: %w", err)
+	}
+	out, err := s.Run(ctx, "display current-configuration")
+	if err != nil {
+		return nil, fmt.Errorf("huawei_vrp: display current-configuration: %w", err)
+	}
+	return []drivers.ConfigArtifact{
+		{Name: "running-config", Content: []byte(strings.TrimRight(out, "\n") + "\n")},
 	}, nil
 }

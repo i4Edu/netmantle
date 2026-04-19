@@ -197,3 +197,85 @@ func TestMikrotikExport(t *testing.T) {
 		t.Errorf("payload: %q", arts[0].Content)
 	}
 }
+
+func TestFortiOS(t *testing.T) {
+	d, err := drivers.Get("fortios")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := fakesession.New(map[string]string{
+		"config system console":   "",
+		"set output standard":     "",
+		"end":                     "",
+		"show full-configuration": "config system global\n    set hostname fw1\nend\n",
+	})
+	arts, err := d.FetchConfig(context.Background(), sess)
+	if err != nil {
+		t.Fatalf("FetchConfig: %v", err)
+	}
+	if len(arts) != 1 || arts[0].Name != "running-config" {
+		t.Fatalf("bad: %+v", arts)
+	}
+	if !strings.Contains(string(arts[0].Content), "hostname fw1") {
+		t.Errorf("payload missing hostname: %q", arts[0].Content)
+	}
+}
+
+func TestFortiOSPagerOptional(t *testing.T) {
+	// Verify the driver succeeds even when the pager-disable commands fail
+	// (e.g. read-only account).
+	d, _ := drivers.Get("fortios")
+	sess := fakesession.New(map[string]string{
+		// pager commands not registered -> fakesession returns error, driver ignores
+		"show full-configuration": "config system global\n    set hostname fw2\nend\n",
+	})
+	arts, err := d.FetchConfig(context.Background(), sess)
+	if err != nil {
+		t.Fatalf("expected success when pager commands fail: %v", err)
+	}
+	if len(arts) != 1 {
+		t.Fatalf("want 1 artefact, got %d", len(arts))
+	}
+}
+
+func TestPaloAltoPANOS(t *testing.T) {
+	d, err := drivers.Get("paloalto_panos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := fakesession.New(map[string]string{
+		"set cli pager off":   "",
+		"show config running": "<config><devices><entry><deviceconfig><system><hostname>pa1</hostname></system></deviceconfig></entry></devices></config>\n",
+	})
+	arts, err := d.FetchConfig(context.Background(), sess)
+	if err != nil {
+		t.Fatalf("FetchConfig: %v", err)
+	}
+	if len(arts) != 1 || arts[0].Name != "running-config" {
+		t.Fatalf("bad: %+v", arts)
+	}
+	if !strings.Contains(string(arts[0].Content), "pa1") {
+		t.Errorf("payload missing hostname: %q", arts[0].Content)
+	}
+}
+
+func TestHuaweiVRP(t *testing.T) {
+	d, err := drivers.Get("huawei_vrp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := fakesession.New(map[string]string{
+		"screen-length 0 temporary":     "",
+		"display current-configuration": "#\nsysname vrp1\n#\nreturn\n",
+	})
+	arts, err := d.FetchConfig(context.Background(), sess)
+	if err != nil {
+		t.Fatalf("FetchConfig: %v", err)
+	}
+	if len(arts) != 1 || arts[0].Name != "running-config" {
+		t.Fatalf("bad: %+v", arts)
+	}
+	if !strings.Contains(string(arts[0].Content), "sysname vrp1") {
+		t.Errorf("payload missing sysname: %q", arts[0].Content)
+	}
+}

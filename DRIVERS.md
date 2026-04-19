@@ -16,6 +16,9 @@ coverage vs scaffolded transports.
 - `vsol_os`
 - `dbc_os`
 - `generic_ssh` (best-effort fallback)
+- `fortios` — Fortinet FortiOS; disables pager via `config system console`, dumps via `show full-configuration`
+- `paloalto_panos` — Palo Alto Networks PAN-OS; disables pager via `set cli pager off`, dumps via `show config running`
+- `huawei_vrp` — Huawei VRP; suppresses pager with `screen-length 0 temporary`, dumps via `display current-configuration`
 
 ## Scaffolded (registered, backup path not hardened yet)
 
@@ -26,17 +29,6 @@ coverage vs scaffolded transports.
 
 These stubs are intentionally present for inventory and roadmap visibility, but
 currently return "not implemented" style errors from backup execution.
-
-## Planned next vendor additions
-
-Priority sequence for near-term expansion:
-
-1. Fortinet
-2. Palo Alto
-3. Huawei
-
-Each new driver should be marked explicitly as either **stub** or **hardened**
-when merged.
 
 ## Driver development references
 
