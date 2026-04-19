@@ -80,7 +80,7 @@ func (s *Service) UpsertRule(ctx context.Context, r Rule) (Rule, error) {
 	_, err := s.DB.ExecContext(ctx, `
         INSERT INTO compliance_rules(tenant_id, name, kind, pattern, severity, description, created_at)
         VALUES(?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT DO UPDATE SET
+        ON CONFLICT(tenant_id, name) DO UPDATE SET
             kind = excluded.kind,
             pattern = excluded.pattern,
             severity = excluded.severity,

@@ -689,8 +689,11 @@ func (s *server) handleTopology(w http.ResponseWriter, r *http.Request) {
         JOIN probes p ON p.id = pr.probe_id
         JOIN devices d ON d.id = pr.device_id
         WHERE p.tenant_id = ? AND p.name = 'neighbors'
+          AND pr.created_at >= ?
         ORDER BY pr.created_at DESC
-        LIMIT ?`, u.TenantID, limit)
+        LIMIT ?`, u.TenantID,
+		time.Now().UTC().Add(-7*24*time.Hour).Format(time.RFC3339),
+		limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
