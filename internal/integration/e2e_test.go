@@ -39,7 +39,7 @@ type testEnv struct {
 
 // newEnv creates a fully-wired testEnv backed by an in-memory SQLite database.
 // It uses the generic_ssh driver so that each backup produces exactly one
-// config artifact ("configuration"), which keeps change-event counts predictable.
+// config artifact, which keeps change-event counts predictable.
 func newEnv(t *testing.T) *testEnv {
 	t.Helper()
 	db, err := storage.Open("sqlite", ":memory:")
@@ -51,21 +51,44 @@ func newEnv(t *testing.T) *testEnv {
 		t.Fatal(err)
 	}
 
-	res, _ := db.Exec(`INSERT INTO tenants(name, created_at) VALUES('acme', '2026-01-01T00:00:00Z')`)
-	tenantID, _ := res.LastInsertId()
+	res, err := db.Exec(`INSERT INTO tenants(name, created_at) VALUES('acme', '2026-01-01T00:00:00Z')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenantID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	devRepo := devices.NewRepo(db)
-	sealer, _ := crypto.NewSealer("integration-test-key")
+	sealer, err := crypto.NewSealer("integration-test-key")
+	if err != nil {
+		t.Fatal(err)
+	}
 	credRepo := credentials.NewRepo(db, sealer)
-	store, _ := configstore.New(t.TempDir())
+	store, err := configstore.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	cred, _ := credRepo.Create(context.Background(),
+	cred, err := credRepo.Create(context.Background(),
 		credentials.Credential{TenantID: tenantID, Name: "c", Username: "u"}, "p")
-	// generic_ssh tries "show configuration" first, then "show running-config".
-	dev, _ := devRepo.CreateDevice(context.Background(), devices.Device{
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cred.ID == 0 {
+		t.Fatal("credRepo.Create returned credential with zero ID")
+	}
+	dev, err := devRepo.CreateDevice(context.Background(), devices.Device{
 		TenantID: tenantID, Hostname: "r1", Address: "10.0.0.1", Port: 22,
 		Driver: "generic_ssh", CredentialID: &cred.ID,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dev.ID == 0 {
+		t.Fatal("devRepo.CreateDevice returned device with zero ID")
+	}
 
 	env := &testEnv{
 		tenantID:   tenantID,
@@ -92,15 +115,20 @@ func newEnv(t *testing.T) *testEnv {
 	)
 
 	// Wire PostCommit hooks: changes recording + compliance evaluation.
+	// Errors are reported via t.Errorf so failures in hooks surface directly.
 	env.backupSvc.PostCommit = []backup.PostCommitHook{
 		func(ctx context.Context, tID int64, d devices.Device, sha string, arts []configstore.Artifact) {
 			for _, a := range arts {
-				_, _ = env.changesSvc.Record(ctx, tID, d.ID, a.Name, sha)
+				if _, err := env.changesSvc.Record(ctx, tID, d.ID, a.Name, sha); err != nil {
+					t.Errorf("post-commit change recording failed for device %d artifact %q: %v", d.ID, a.Name, err)
+				}
 			}
 		},
 		func(ctx context.Context, tID int64, d devices.Device, _ string, arts []configstore.Artifact) {
 			for _, a := range arts {
-				_, _ = env.complianceSvc.EvaluateDevice(ctx, tID, d.ID, string(a.Content))
+				if _, err := env.complianceSvc.EvaluateDevice(ctx, tID, d.ID, string(a.Content)); err != nil {
+					t.Errorf("post-commit compliance evaluation failed for device %d artifact %q: %v", d.ID, a.Name, err)
+				}
 			}
 		},
 	}
@@ -136,7 +164,10 @@ func TestBackupDiffComplianceWorkflow(t *testing.T) {
 	mustBackup(t, env)
 
 	// The first backup generates a change event (new config vs empty baseline).
-	evsBefore, _ := env.changesSvc.List(ctx, env.tenantID, 10)
+	evsBefore, err := env.changesSvc.List(ctx, env.tenantID, 10)
+	if err != nil {
+		t.Fatalf("list changes (before): %v", err)
+	}
 	initialCount := len(evsBefore)
 	if initialCount == 0 {
 		t.Fatal("expected at least 1 change event after first backup")
@@ -149,7 +180,7 @@ func TestBackupDiffComplianceWorkflow(t *testing.T) {
 	// Exactly one new ChangeEvent must have been appended.
 	evsAfter, err := env.changesSvc.List(ctx, env.tenantID, 10)
 	if err != nil {
-		t.Fatalf("list changes: %v", err)
+		t.Fatalf("list changes (after): %v", err)
 	}
 	if len(evsAfter) != initialCount+1 {
 		t.Fatalf("expected %d events after change, got %d", initialCount+1, len(evsAfter))
@@ -234,13 +265,19 @@ func TestBackupIdempotence(t *testing.T) {
 	env.configBody = "hostname r1\n"
 	mustBackup(t, env)
 
-	evsBefore, _ := env.changesSvc.List(ctx, env.tenantID, 10)
+	evsBefore, err := env.changesSvc.List(ctx, env.tenantID, 10)
+	if err != nil {
+		t.Fatalf("list (before): %v", err)
+	}
 	countBefore := len(evsBefore)
 
 	// Second backup with same config — should produce no new event.
 	mustBackup(t, env)
 
-	evsAfter, _ := env.changesSvc.List(ctx, env.tenantID, 10)
+	evsAfter, err := env.changesSvc.List(ctx, env.tenantID, 10)
+	if err != nil {
+		t.Fatalf("list (after): %v", err)
+	}
 	if len(evsAfter) != countBefore {
 		t.Fatalf("expected %d events (same as before), got %d", countBefore, len(evsAfter))
 	}
@@ -302,13 +339,17 @@ func TestComplianceTransitionNotification(t *testing.T) {
 	}
 
 	// First evaluation: no prior finding → no transition callback.
-	_, _ = svc.EvaluateDevice(ctx, env.tenantID, env.devID, "hostname x\n")
+	if _, err := svc.EvaluateDevice(ctx, env.tenantID, env.devID, "hostname x\n"); err != nil {
+		t.Fatalf("evaluate (1): %v", err)
+	}
 	if len(transitions) != 0 {
 		t.Fatalf("expected no transition on first eval, got %v", transitions)
 	}
 
 	// Second evaluation with passing status → transition from fail→pass.
-	_, _ = svc.EvaluateDevice(ctx, env.tenantID, env.devID, "hostname x\nntp server 1.1.1.1\n")
+	if _, err := svc.EvaluateDevice(ctx, env.tenantID, env.devID, "hostname x\nntp server 1.1.1.1\n"); err != nil {
+		t.Fatalf("evaluate (2): %v", err)
+	}
 	if len(transitions) != 1 {
 		t.Fatalf("expected 1 transition, got %v", transitions)
 	}
@@ -317,7 +358,9 @@ func TestComplianceTransitionNotification(t *testing.T) {
 	}
 
 	// Third evaluation with same passing status → no additional transition.
-	_, _ = svc.EvaluateDevice(ctx, env.tenantID, env.devID, "hostname x\nntp server 2.2.2.2\n")
+	if _, err := svc.EvaluateDevice(ctx, env.tenantID, env.devID, "hostname x\nntp server 2.2.2.2\n"); err != nil {
+		t.Fatalf("evaluate (3): %v", err)
+	}
 	if len(transitions) != 1 {
 		t.Fatalf("expected still 1 transition after stable state, got %v", transitions)
 	}

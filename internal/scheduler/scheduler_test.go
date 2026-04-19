@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,19 +24,28 @@ func TestLeaseHandoff(t *testing.T) {
 		t.Fatalf("a acquire: %v %v", err, ok)
 	}
 	// b cannot steal while a's lease is fresh.
-	ok, _ = b.Acquire(context.Background())
+	ok, err = b.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("b acquire (live): %v", err)
+	}
 	if ok {
 		t.Fatal("b stole live lease")
 	}
 	// Manually expire a's lease.
 	_, _ = db.Exec(`UPDATE scheduler_leases SET expires_at=? WHERE name='backups'`,
 		time.Now().Add(-time.Hour).UTC().Format(time.RFC3339))
-	ok, _ = b.Acquire(context.Background())
+	ok, err = b.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("b acquire (expired): %v", err)
+	}
 	if !ok {
 		t.Fatal("b should take over after expiry")
 	}
 	// a renewing should now fail (b holds).
-	ok, _ = a.Acquire(context.Background())
+	ok, err = a.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("a re-acquire: %v", err)
+	}
 	if ok {
 		t.Fatal("a stole live lease back")
 	}
@@ -51,20 +61,36 @@ func TestConcurrentLeaseAcquisition(t *testing.T) {
 	}
 
 	const workers = 8
-	var winners int32
+	var (
+		winners int32
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		errs    []error
+	)
 	ch := make(chan struct{})
 	for i := 0; i < workers; i++ {
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			<-ch
 			l := NewLease(db, "concurrent", 30*time.Second)
-			ok, _ := l.Acquire(context.Background())
+			ok, err := l.Acquire(context.Background())
+			if err != nil {
+				mu.Lock()
+				errs = append(errs, err)
+				mu.Unlock()
+				return
+			}
 			if ok {
 				atomic.AddInt32(&winners, 1)
 			}
 		}()
 	}
 	close(ch) // release all goroutines simultaneously
-	time.Sleep(200 * time.Millisecond)
+	wg.Wait() // wait until every goroutine has finished before asserting
+	for _, e := range errs {
+		t.Errorf("Acquire returned unexpected error: %v", e)
+	}
 	if got := atomic.LoadInt32(&winners); got != 1 {
 		t.Fatalf("expected exactly 1 winner, got %d", got)
 	}
@@ -80,7 +106,10 @@ func TestLeaseRenewalKeepsHolder(t *testing.T) {
 	}
 
 	holder := NewLease(db, "renew", 10*time.Second)
-	ok, _ := holder.Acquire(context.Background())
+	ok, err := holder.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("initial acquire error: %v", err)
+	}
 	if !ok {
 		t.Fatal("initial acquire failed")
 	}
@@ -93,14 +122,21 @@ func TestLeaseRenewalKeepsHolder(t *testing.T) {
 	}
 	// A competitor must still not be able to steal the live lease.
 	other := NewLease(db, "renew", 10*time.Second)
-	ok, _ = other.Acquire(context.Background())
+	ok, err = other.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("competitor acquire error: %v", err)
+	}
 	if ok {
 		t.Fatal("competitor stole live lease after renewals")
 	}
 }
 
+// testTick is a small interval used by runner tests so they don't have to
+// wait 1 second for the real default ticker to fire.
+const testTick = 10 * time.Millisecond
+
 // TestRunnerJobsUnderLeader verifies that a Runner executes its jobs while it
-// holds the lease, and skips them when the lease is held by another node.
+// holds the lease.
 func TestRunnerJobsUnderLeader(t *testing.T) {
 	db, _ := storage.Open("sqlite", ":memory:")
 	defer db.Close()
@@ -119,10 +155,10 @@ func TestRunnerJobsUnderLeader(t *testing.T) {
 	}
 
 	lease := NewLease(db, "runner-test", 30*time.Second)
-	runner := &Runner{Lease: lease, Jobs: []Job{job}}
+	runner := &Runner{Lease: lease, Jobs: []Job{job}, TickInterval: testTick}
 
-	// Run for 2 seconds so the 1-second internal ticker fires at least once.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// Run until at least one tick has occurred, then stop.
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	runner.Start(ctx, nil)
 
@@ -142,7 +178,11 @@ func TestRunnerSkipsWithoutLease(t *testing.T) {
 
 	// Pre-acquire the lease with a long TTL so the runner can never win it.
 	blocker := NewLease(db, "skip-test", 10*time.Minute)
-	if ok, _ := blocker.Acquire(context.Background()); !ok {
+	ok, err := blocker.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("blocker acquire error: %v", err)
+	}
+	if !ok {
 		t.Fatal("blocker acquire failed")
 	}
 
@@ -157,10 +197,10 @@ func TestRunnerSkipsWithoutLease(t *testing.T) {
 	}
 
 	lease := NewLease(db, "skip-test", 30*time.Second)
-	runner := &Runner{Lease: lease, Jobs: []Job{job}}
+	runner := &Runner{Lease: lease, Jobs: []Job{job}, TickInterval: testTick}
 
-	// Run for 2 seconds to match the runner ticker interval.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// Run for several ticks — the runner must never win the lease.
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	runner.Start(ctx, nil)
 
@@ -181,21 +221,35 @@ func TestTenantIsolationLeases(t *testing.T) {
 	t1 := NewLease(db, "tenant:1:backups", 30*time.Second)
 	t2 := NewLease(db, "tenant:2:backups", 30*time.Second)
 
-	ok, _ := t1.Acquire(context.Background())
+	ok, err := t1.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("tenant 1 acquire error: %v", err)
+	}
 	if !ok {
 		t.Fatal("tenant 1 acquire failed")
 	}
-	ok, _ = t2.Acquire(context.Background())
+	ok, err = t2.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("tenant 2 acquire error: %v", err)
+	}
 	if !ok {
 		t.Fatal("tenant 2 acquire failed — must be independent of tenant 1")
 	}
 
 	// Both tenants can renew without conflict.
 	for i := 0; i < 3; i++ {
-		if ok, _ := t1.Acquire(context.Background()); !ok {
+		ok, err := t1.Acquire(context.Background())
+		if err != nil {
+			t.Fatalf("tenant 1 renewal %d error: %v", i, err)
+		}
+		if !ok {
 			t.Fatalf("tenant 1 renewal %d failed", i)
 		}
-		if ok, _ := t2.Acquire(context.Background()); !ok {
+		ok, err = t2.Acquire(context.Background())
+		if err != nil {
+			t.Fatalf("tenant 2 renewal %d error: %v", i, err)
+		}
+		if !ok {
 			t.Fatalf("tenant 2 renewal %d failed", i)
 		}
 	}

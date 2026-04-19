@@ -29,7 +29,7 @@ timelines privately.
 |---------|------|------------|
 | REST API | Unauthorized access to device inventory or configs | Session-cookie auth + RBAC; unauthenticated endpoints limited to `/auth/login` |
 | Credential store | Plaintext SSH credentials leaked from DB | Envelope-encrypted at rest in `credentials` table; secrets never returned by API |
-| Admin bootstrap token | Attacker uses bootstrap token to create admin account | Token is shown once on first startup; rotate by running `--reset-bootstrap` |
+| Admin bootstrap token | Attacker uses bootstrap token to create admin account | Token is shown once on first startup; delete or disable the bootstrap account before exposing the service externally |
 | SSH transport | MITM on device connections | Known-hosts enforcement is a follow-up; currently trust-on-first-use |
 | Tenant boundary | Tenant A reads Tenant B's configs | All queries carry `tenant_id=?` predicate; enforced at the repo/service layer |
 | GitOps mirror token | Git remote token exfiltrated from DB | Stored envelope-encrypted in `gitops_mirrors.secret_envelope` |
@@ -49,9 +49,11 @@ Operational guidance:
    secrets manager immediately.
 2. Create a named admin account with a strong password and delete or disable
    the bootstrap account before exposing the service externally.
-3. If the bootstrap token is lost, re-run `netmantle bootstrap-reset` to
-   invalidate the existing admin user and generate a new token. This requires
-   local filesystem access to the database.
+3. If the bootstrap token is lost, there is no automated recovery command.
+   Recovery requires local filesystem access: open the database directly
+   (e.g., `sqlite3 netmantle.db`), delete or disable the admin row in the
+   `users` table, and restart NetMantle — a new bootstrap token will be
+   generated and printed on startup.
 4. In Kubernetes deployments, the bootstrap password is written to the pod logs
    on the first init; capture it via `kubectl logs` before the pod restarts.
 
@@ -62,7 +64,10 @@ Operational guidance:
   hardening before production use.
 - SSH known-hosts verification is not yet enforced (trust-on-first-use); this
   is tracked as a follow-up hardening item.
-- Notification channel `config` fields are stored as plain JSON; operators
-  should treat the database file as a secret and restrict filesystem access.
+- Notification channel `config` is stored as JSON. For email channels, the
+  SMTP password is automatically sealed into `password_envelope` (the
+  plaintext field is removed before storage). For webhook and Slack channels,
+  all config fields (including URL tokens) are stored as provided — operators
+  must restrict filesystem access to the database to protect these values.
 - Additional security hardening work is tracked in roadmap follow-ups
   (threat-model docs, pen-test depth, expanded operational runbooks).

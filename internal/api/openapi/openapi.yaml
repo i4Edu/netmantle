@@ -204,9 +204,11 @@ paths:
   /notifications/channels:
     get:
       summary: List notification channels
+      x-stability: frozen
       responses: {'200': {description: OK, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/NotificationChannel'}}}}}}
     post:
       summary: Create notification channel
+      x-stability: frozen
       requestBody:
         required: true
         content: {application/json: {schema: {$ref: '#/components/schemas/NotificationChannelInput'}}}
@@ -214,14 +216,17 @@ paths:
   /notifications/channels/{id}:
     delete:
       summary: Delete a notification channel
+      x-stability: frozen
       parameters: [{$ref: '#/components/parameters/Id'}]
       responses: {'204': {description: Deleted}}
   /notifications/rules:
     get:
       summary: List notification rules
+      x-stability: frozen
       responses: {'200': {description: OK}}
     post:
       summary: Create notification rule
+      x-stability: frozen
       responses: {'201': {description: Created}}
 
   # -------------------------------------------------------------------------
@@ -482,7 +487,7 @@ components:
       properties:
         name: {type: string}
         kind: {type: string, enum: [webhook, slack, email]}
-        config: {type: object, description: 'Channel-specific configuration (URL, token, etc.). Secrets are envelope-encrypted at rest.'}
+        config: {type: object, description: 'Channel-specific configuration (URL, token, etc.). For email channels, if a plaintext "password" field is provided it is automatically moved to "password_envelope" (envelope-encrypted); the plaintext field is not stored. For webhook and slack channels, all fields (including any URL tokens) are stored as provided — treat the database file as a secret.'}
     NotificationChannel:
       allOf:
         - {$ref: '#/components/schemas/NotificationChannelInput'}
