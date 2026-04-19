@@ -106,10 +106,14 @@ func (s *JobService) Claim(ctx context.Context, tenantID, pollerID int64, suppor
 	if len(supportedTypes) == 0 {
 		supportedTypes = []JobType{JobTypeBackup, JobTypeProbe, JobTypeCustom}
 	}
-	// Use a single SQLite RETURNING-style approach via sub-select update.
-	// We SELECT the best candidate first (LIMIT 1), then UPDATE only that row.
-	var jobID int64
-	q := `SELECT id FROM poller_jobs
+	// SELECT the best candidate first (LIMIT 1), fetching the timestamps
+	// needed to recalculate expires_at in Go (avoids complex SQL arithmetic).
+	var (
+		jobID           int64
+		createdAtStr    string
+		expiresAtStr    sql.NullString
+	)
+	q := `SELECT id, created_at, expires_at FROM poller_jobs
           WHERE tenant_id=? AND status='queued'
             AND job_type IN (`
 	args := []any{tenantID}
@@ -121,7 +125,7 @@ func (s *JobService) Claim(ctx context.Context, tenantID, pollerID int64, suppor
 		args = append(args, string(t))
 	}
 	q += `) ORDER BY created_at ASC LIMIT 1`
-	err := s.DB.QueryRowContext(ctx, q, args...).Scan(&jobID)
+	err := s.DB.QueryRowContext(ctx, q, args...).Scan(&jobID, &createdAtStr, &expiresAtStr)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, sql.ErrNoRows
 	}
@@ -129,31 +133,32 @@ func (s *JobService) Claim(ctx context.Context, tenantID, pollerID int64, suppor
 		return Job{}, fmt.Errorf("poller: claim select: %w", err)
 	}
 
-	now := time.Now().UTC().Format(time.RFC3339)
+	// Compute the new expires_at in Go for clarity and testability.
+	// If the job had an expiry set, shift it to claimed_at + original TTL.
+	claimedAt := time.Now().UTC()
+	var newExpiresAt *string
+	if expiresAtStr.Valid {
+		newExpiresAt = computeNewExpiresAt(createdAtStr, expiresAtStr.String, claimedAt)
+	}
+
+	var expiresAtArg any
+	if newExpiresAt != nil {
+		expiresAtArg = *newExpiresAt
+	}
+
 	res, err := s.DB.ExecContext(ctx,
 		`UPDATE poller_jobs
          SET status='claimed',
              poller_id=?,
              claimed_at=?,
-             expires_at=CASE
-                 WHEN expires_at IS NULL OR created_at IS NULL THEN expires_at
-                 ELSE strftime(
-                     '%Y-%m-%dT%H:%M:%SZ',
-                     datetime(
-                         ?,
-                         printf(
-                             '+%d seconds',
-                             CAST(strftime('%s', expires_at) AS INTEGER) - CAST(strftime('%s', created_at) AS INTEGER)
-                         )
-                     )
-                 )
-             END
+             expires_at=?
          WHERE id=? AND tenant_id=? AND status='queued'
            AND EXISTS (
                SELECT 1 FROM pollers
                WHERE id=? AND tenant_id=?
            )`,
-		pollerID, now, now, jobID, tenantID, pollerID, tenantID)
+		pollerID, claimedAt.Format(time.RFC3339), expiresAtArg,
+		jobID, tenantID, pollerID, tenantID)
 	if err != nil {
 		return Job{}, fmt.Errorf("poller: claim update: %w", err)
 	}
@@ -163,6 +168,27 @@ func (s *JobService) Claim(ctx context.Context, tenantID, pollerID int64, suppor
 		return Job{}, sql.ErrNoRows
 	}
 	return s.Get(ctx, tenantID, jobID)
+}
+
+// computeNewExpiresAt shifts an expiry timestamp to be relative to a new
+// baseline (claimedAt) rather than the original createdAt.
+// It preserves the original TTL duration (expiresAt - createdAt).
+// Returns nil if the timestamps cannot be parsed or the TTL is non-positive.
+func computeNewExpiresAt(createdAtStr, expiresAtStr string, claimedAt time.Time) *string {
+	createdAt, err := time.Parse(time.RFC3339, createdAtStr)
+	if err != nil {
+		return nil
+	}
+	expiresAt, err := time.Parse(time.RFC3339, expiresAtStr)
+	if err != nil {
+		return nil
+	}
+	ttl := expiresAt.Sub(createdAt)
+	if ttl <= 0 {
+		return nil
+	}
+	s := claimedAt.Add(ttl).UTC().Format(time.RFC3339)
+	return &s
 }
 
 // Complete marks a claimed job as done or failed.

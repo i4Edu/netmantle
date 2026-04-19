@@ -65,8 +65,11 @@ func ParseRPCReply(framed string) (string, error) {
 				depth = 0
 			} else if inData {
 				depth++
-				// Reconstruct the opening tag (without namespace declarations
-				// for brevity; callers get the raw content only).
+				// Reconstruct the opening tag, stripping namespace declarations.
+				// Go's encoding/xml represents namespace declarations as:
+				//   xmlns="uri"       → Attr{Name:{Space:"", Local:"xmlns"}, ...}
+				//   xmlns:prefix="uri"→ Attr{Name:{Space:"xmlns", Local:"prefix"}, ...}
+				// Both patterns are excluded below; all other attributes are kept.
 				builder.WriteString("<")
 				builder.WriteString(t.Name.Local)
 				for _, a := range t.Attr {

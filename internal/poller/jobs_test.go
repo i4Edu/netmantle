@@ -197,3 +197,59 @@ func TestJobListByTenant(t *testing.T) {
 		t.Fatalf("expected 5 jobs, got %d", len(jobs))
 	}
 }
+
+// TestClaimExpiresAtRecalculated verifies that Claim recalculates expires_at
+// as claimed_at + original TTL (not relative to created_at). This ensures
+// the poller has the full TTL duration from when it claimed the job, not from
+// when the job was first enqueued.
+func TestClaimExpiresAtRecalculated(t *testing.T) {
+svc, done := newJobService(t)
+defer done()
+seedTenant(t, svc, 1)
+seedDevice(t, svc, 1, 10)
+seedPoller(t, svc, 1, 5, "p5")
+
+const ttl = time.Hour
+job, err := svc.Enqueue(context.Background(), 1, 10, poller.JobTypeBackup, "", "exp-recalc", ttl)
+if err != nil {
+t.Fatal(err)
+}
+if job.ExpiresAt == nil {
+t.Fatal("expected expires_at to be set after enqueue")
+}
+originalExpiry := *job.ExpiresAt
+
+// Simulate the job sitting in the queue for a while before being claimed.
+// We can't actually sleep; instead directly backdate created_at so the
+// elapsed time appears to be 10 minutes.
+backdateBy := -10 * time.Minute
+if _, err := svc.DB.Exec(`UPDATE poller_jobs SET created_at=?, expires_at=?
+        WHERE idempotency_key='exp-recalc'`,
+time.Now().UTC().Add(backdateBy).Format(time.RFC3339),
+time.Now().UTC().Add(backdateBy).Add(ttl).Format(time.RFC3339),
+); err != nil {
+t.Fatalf("backdate: %v", err)
+}
+_ = originalExpiry
+
+before := time.Now().UTC()
+claimed, err := svc.Claim(context.Background(), 1, 5, nil)
+if err != nil {
+t.Fatalf("Claim: %v", err)
+}
+after := time.Now().UTC()
+
+if claimed.ExpiresAt == nil {
+t.Fatal("expected expires_at after claim")
+}
+newExpiry := *claimed.ExpiresAt
+
+// The new expiry should be approximately claimed_at + ttl, not the
+// backdated enqueue expiry. Allow a 10-second tolerance.
+expectedMin := before.Add(ttl - 10*time.Second)
+expectedMax := after.Add(ttl + 10*time.Second)
+if newExpiry.Before(expectedMin) || newExpiry.After(expectedMax) {
+t.Fatalf("new expires_at %v not in expected range [%v, %v]",
+newExpiry, expectedMin, expectedMax)
+}
+}
