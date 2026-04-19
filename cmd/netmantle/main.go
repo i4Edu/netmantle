@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/i4Edu/netmantle/internal/api"
+	"github.com/i4Edu/netmantle/internal/audit"
 	"github.com/i4Edu/netmantle/internal/auth"
 	"github.com/i4Edu/netmantle/internal/automation"
 	"github.com/i4Edu/netmantle/internal/backup"
@@ -134,8 +135,10 @@ func runServe(argv []string) error {
 			Username: user, Password: pw, Timeout: cfg.Backup.Timeout,
 		})
 	}
+	auditSvc := audit.New(db, log)
 	bSvc := backup.New(devRepo, credRepo, store, db, log,
 		cfg.Backup.Timeout, cfg.Backup.Workers, sessionFactory)
+	bSvc.Audit = auditSvc
 
 	// Phase 2..10 services.
 	chgSvc := changes.New(db, store, &diff.Engine{Rules: diff.DefaultRules()})
@@ -207,7 +210,7 @@ func runServe(argv []string) error {
 	metrics := observability.New()
 	handler := api.NewServer(api.Deps{
 		Auth: authSvc, Devices: devRepo, Credentials: credRepo,
-		Backup: bSvc, Logger: log, Metrics: metrics,
+		Backup: bSvc, Logger: log, Metrics: metrics, Audit: auditSvc,
 		Changes: chgSvc, Notify: notifySvc, Search: searchSvc,
 		Compliance: complianceSvc, Discovery: discoverySvc,
 		Automation: automationSvc, Probes: probesSvc,

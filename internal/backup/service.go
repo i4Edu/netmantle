@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/i4Edu/netmantle/internal/audit"
 	"github.com/i4Edu/netmantle/internal/configstore"
 	"github.com/i4Edu/netmantle/internal/credentials"
 	"github.com/i4Edu/netmantle/internal/devices"
@@ -31,6 +32,12 @@ type Service struct {
 	Logger      *slog.Logger
 	Timeout     time.Duration
 	NewSession  SessionFactory
+
+	// Audit, when set, is used for all audit_log writes so the format
+	// stays consistent with the rest of the codebase (see internal/audit).
+	// When nil, audit writes are skipped (the run rows in backup_runs are
+	// the canonical record either way).
+	Audit *audit.Service
 
 	// PostCommit is invoked once per successful, content-changing backup.
 	// It runs in the request goroutine but uses a detached background
@@ -122,11 +129,18 @@ func (s *Service) BackupNow(ctx context.Context, tenantID, deviceID int64, actor
 		); uerr != nil {
 			s.Logger.Warn("update backup_run failed", "err", uerr, "run_id", runID)
 		}
-		_, _ = s.DB.ExecContext(context.Background(),
-			`INSERT INTO audit_log(tenant_id, action, target, detail, created_at) VALUES(?, ?, ?, ?, ?)`,
-			tenantID, "device.backup", fmt.Sprintf("device:%d", dev.ID),
-			fmt.Sprintf("status=%s actor=%s sha=%s err=%s", status, actor, sha, errMsg),
-			now.Format(time.RFC3339))
+		if s.Audit != nil {
+			s.Audit.Record(context.Background(), tenantID, 0, "backup",
+				"device.backup", fmt.Sprintf("device:%d", dev.ID),
+				fmt.Sprintf("status=%s actor=%s sha=%s err=%s", status, actor, sha, errMsg))
+		} else {
+			_, _ = s.DB.ExecContext(context.Background(),
+				`INSERT INTO audit_log(tenant_id, action, target, detail, source, created_at) VALUES(?, ?, ?, ?, ?, ?)`,
+				tenantID, "device.backup", fmt.Sprintf("device:%d", dev.ID),
+				fmt.Sprintf("status=%s actor=%s sha=%s err=%s", status, actor, sha, errMsg),
+				"backup",
+				now.Format(time.RFC3339))
+		}
 	}
 
 	bctx, cancel := context.WithTimeout(ctx, s.Timeout)

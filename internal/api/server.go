@@ -10,6 +10,7 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/i4Edu/netmantle/internal/audit"
 	"github.com/i4Edu/netmantle/internal/auth"
 	"github.com/i4Edu/netmantle/internal/automation"
 	"github.com/i4Edu/netmantle/internal/backup"
@@ -49,6 +51,7 @@ type Deps struct {
 	Backup      *backup.Service
 	Logger      *slog.Logger
 	Metrics     *observability.Metrics
+	Audit       *audit.Service
 
 	// Optional Phase 2..10 services. Endpoints registered for each are only
 	// installed when the corresponding pointer is non-nil.
@@ -102,6 +105,10 @@ func NewServer(d Deps) http.Handler {
 	mux.Handle("GET /api/v1/credentials", s.auth(s.handleListCredentials))
 	mux.Handle("POST /api/v1/credentials", s.auth(s.requireWrite(s.handleCreateCredential)))
 	mux.Handle("DELETE /api/v1/credentials/{id}", s.auth(s.requireWrite(s.handleDeleteCredential)))
+
+	// Audit log (read-only). Available to any authenticated user; results
+	// are tenant-scoped.
+	mux.Handle("GET /api/v1/audit", s.auth(s.handleListAudit))
 
 	// Phase 2 — changes & notifications.
 	if d.Changes != nil {
@@ -285,6 +292,23 @@ func (s *server) requireAdmin(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// recordAudit writes a row to audit_log if the audit service is configured.
+// The source defaults to "api"; callers using a different channel (e.g. UI
+// vs. a future webhook) may pass an explicit value through audit.Record.
+func (s *server) recordAudit(r *http.Request, action, target, detail string) {
+	if s.Audit == nil {
+		return
+	}
+	u := userFromContext(r.Context())
+	var tenantID, actorID int64
+	if u != nil {
+		tenantID = u.TenantID
+		actorID = u.ID
+	}
+	s.Audit.Record(r.Context(), tenantID, actorID, audit.SourceAPI,
+		action, target, detail)
+}
+
 // ---------------- handlers ----------------
 
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -418,6 +442,8 @@ func (s *server) handleCreateDevice(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.recordAudit(r, "device.create", fmt.Sprintf("device:%d", d.ID),
+		fmt.Sprintf("hostname=%s driver=%s", d.Hostname, d.Driver))
 	writeJSON(w, http.StatusCreated, d)
 }
 
@@ -457,6 +483,8 @@ func (s *server) handleUpdateDevice(w http.ResponseWriter, r *http.Request) {
 		notFoundOr400(w, err)
 		return
 	}
+	s.recordAudit(r, "device.update", fmt.Sprintf("device:%d", d.ID),
+		fmt.Sprintf("hostname=%s driver=%s", d.Hostname, d.Driver))
 	writeJSON(w, http.StatusOK, d)
 }
 
@@ -470,6 +498,7 @@ func (s *server) handleDeleteDevice(w http.ResponseWriter, r *http.Request) {
 		notFoundOr500(w, err)
 		return
 	}
+	s.recordAudit(r, "device.delete", fmt.Sprintf("device:%d", id), "")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -481,6 +510,8 @@ func (s *server) handleBackupNow(w http.ResponseWriter, r *http.Request) {
 	}
 	run, err := s.Backup.BackupNow(r.Context(), u.TenantID, id, u.Username)
 	if err != nil {
+		s.recordAudit(r, "device.backup.request",
+			fmt.Sprintf("device:%d", id), "status=failed err="+err.Error())
 		// Backup may have created a "failed" run row before returning.
 		if run != nil {
 			writeJSON(w, http.StatusBadGateway, run)
@@ -489,6 +520,8 @@ func (s *server) handleBackupNow(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.recordAudit(r, "device.backup.request",
+		fmt.Sprintf("device:%d", id), fmt.Sprintf("run_id=%d status=%s", run.ID, run.Status))
 	writeJSON(w, http.StatusOK, run)
 }
 
@@ -556,6 +589,7 @@ func (s *server) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.recordAudit(r, "device_group.create", fmt.Sprintf("group:%d", g.ID), "name="+g.Name)
 	writeJSON(w, http.StatusCreated, g)
 }
 
@@ -594,6 +628,9 @@ func (s *server) handleCreateCredential(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// NOTE: never log the secret; only the name + username + id.
+	s.recordAudit(r, "credential.create", fmt.Sprintf("credential:%d", c.ID),
+		fmt.Sprintf("name=%s username=%s", c.Name, c.Username))
 	writeJSON(w, http.StatusCreated, c)
 }
 
@@ -607,6 +644,7 @@ func (s *server) handleDeleteCredential(w http.ResponseWriter, r *http.Request) 
 		notFoundOr500(w, err)
 		return
 	}
+	s.recordAudit(r, "credential.delete", fmt.Sprintf("credential:%d", id), "")
 	w.WriteHeader(http.StatusNoContent)
 }
 
