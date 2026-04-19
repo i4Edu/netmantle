@@ -31,9 +31,9 @@ func init() {
 	// NETCONF drivers (hardened — requires NetconfSession factory in backup.Service).
 	drivers.Register(&ciscoNetconf{})
 	drivers.Register(&junosNetconf{})
-	// Model-driven config backups (wired through backup.Service.NetconfSession).
-	drivers.Register(&restconfDriver{})
-	drivers.Register(&gnmiDriver{})
+	// Scaffolded transport stubs (RESTCONF and gNMI still pending).
+	drivers.Register(&netconfStub{name: "restconf"})
+	drivers.Register(&netconfStub{name: "gnmi"})
 }
 
 // ciscoIOS implements the Cisco IOS / IOS-XE backup flow.
@@ -163,42 +163,14 @@ func (mikrotikROS) FetchConfig(ctx context.Context, s drivers.Session) ([]driver
 	}, nil
 }
 
-// restconfDriver captures model-driven configuration for RESTCONF-managed
-// devices using the NETCONF session path configured in backup.Service.
-type restconfDriver struct{}
+// netconfStub is a placeholder for the restconf and gnmi drivers.
+// cisco_netconf and junos_netconf are now hardened (see below).
+type netconfStub struct{ name string }
 
-func (restconfDriver) Name() string { return "restconf" }
+func (n *netconfStub) Name() string { return n.name }
 
-func (restconfDriver) FetchConfig(ctx context.Context, s drivers.Session) ([]drivers.ConfigArtifact, error) {
-	cfg, err := s.Run(ctx, "get-config:running")
-	if err != nil {
-		return nil, fmt.Errorf("restconf: get-config running: %w", err)
-	}
-	if cfg == "" {
-		return nil, fmt.Errorf("restconf: empty config returned")
-	}
-	return []drivers.ConfigArtifact{
-		{Name: "restconf-running", Content: []byte(strings.TrimRight(cfg, "\n") + "\n")},
-	}, nil
-}
-
-// gnmiDriver captures model-driven configuration for gNMI-managed devices
-// using the NETCONF session path configured in backup.Service.
-type gnmiDriver struct{}
-
-func (gnmiDriver) Name() string { return "gnmi" }
-
-func (gnmiDriver) FetchConfig(ctx context.Context, s drivers.Session) ([]drivers.ConfigArtifact, error) {
-	cfg, err := s.Run(ctx, "get-config:running")
-	if err != nil {
-		return nil, fmt.Errorf("gnmi: get-config running: %w", err)
-	}
-	if cfg == "" {
-		return nil, fmt.Errorf("gnmi: empty config returned")
-	}
-	return []drivers.ConfigArtifact{
-		{Name: "gnmi-running", Content: []byte(strings.TrimRight(cfg, "\n") + "\n")},
-	}, nil
+func (n *netconfStub) FetchConfig(ctx context.Context, _ drivers.Session) ([]drivers.ConfigArtifact, error) {
+	return nil, fmt.Errorf("%s: RESTCONF/gNMI driver is scaffolded; backup wiring lands in a follow-up PR", n.name)
 }
 
 // ciscoNetconf implements NETCONF-based backup for Cisco IOS-XE / NX-OS

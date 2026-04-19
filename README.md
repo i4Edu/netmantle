@@ -47,7 +47,8 @@ every tag.
   `internal/drivers` and `internal/transport`. CLI drivers are hardened today
   for Cisco IOS/NX‑OS/IOS‑XR, Arista EOS, Juniper Junos, MikroTik RouterOS,
   Nokia SR OS, Huawei VRP, Fortinet FortiOS, Palo Alto PAN‑OS, BDCOM, V‑SOL,
-  and DBC; NETCONF / RESTCONF / gNMI backup paths are wired.
+  and DBC; NETCONF capture is hardened, while RESTCONF / gNMI remain
+  registered scaffolded stubs until native transport wiring lands.
 - **Git is the source of truth for configs** — every backup commits the
   artifact text into a per‑device git repository under
   `storage.config_repo_root`, so diff and history are first‑class.
@@ -76,7 +77,7 @@ items are usable today; *Follow‑up* items are tracked but not yet hardened.
 | 7 | In‑app CLI & distributed pollers | Web terminal with transcript/audit, poller registration + heartbeat | Full gRPC poller wire protocol, remote execution hardening |
 | 8 | Runtime state auditing & compliance | Probe framework + runtime checks | Broader probe library and policy packs |
 | 9 | Multi‑tenancy & HA | Tenant CRUD, quotas, leader‑elected scheduler, Helm chart | Automated HA / failover validation, scale testing |
-| 10 | Hardening + modern transports + topology + GitOps mirror | NETCONF helpers, RESTCONF / gNMI backup wiring, LLDP/CDP topology API + graph-canvas renderer, GitOps mirror, signed release + SBOM workflow | Per-driver `Apply()` execution path, full gRPC poller wire server, additional transport hardening |
+| 10 | Hardening + modern transports + topology + GitOps mirror | NETCONF helpers, RESTCONF / gNMI stubs, LLDP/CDP topology API + graph-canvas renderer, GitOps mirror, signed release + SBOM workflow | Full RESTCONF / gNMI backup wiring, per-driver `Apply()` execution path, full gRPC poller wire server, additional transport hardening |
 
 ## Architecture at a glance
 
