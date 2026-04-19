@@ -279,3 +279,27 @@ func TestHuaweiVRP(t *testing.T) {
 		t.Errorf("payload missing sysname: %q", arts[0].Content)
 	}
 }
+
+func TestModelDrivenDriversRemainScaffolded(t *testing.T) {
+	cases := []struct {
+		driver string
+	}{
+		{driver: "restconf"},
+		{driver: "gnmi"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.driver, func(t *testing.T) {
+			d, err := drivers.Get(tc.driver)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = d.FetchConfig(context.Background(), fakesession.New(nil))
+			if err == nil {
+				t.Fatal("expected scaffolded error")
+			}
+			if !strings.Contains(err.Error(), "scaffolded") {
+				t.Fatalf("expected scaffolded error message, got %v", err)
+			}
+		})
+	}
+}
