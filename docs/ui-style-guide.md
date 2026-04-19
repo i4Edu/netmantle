@@ -45,6 +45,8 @@ changes.
 | Drift / pending | `--status-warn`, `--status-warn-soft` | Amber dot/badge |
 | Violation / failure | `--status-bad`, `--status-bad-soft` | Red dot/badge |
 | Informational | `--status-info`, `--status-info-soft` | Blue dot/badge |
+| Sidebar surface | `--sidebar-bg`, `--sidebar-fg`, `--sidebar-fg-active`, `--sidebar-active-bg` | The dark left rail |
+| Top bar surface | `--topbar-bg`, `--topbar-fg`, `--topbar-border` | The light top bar (separate from sidebar so the two can be styled independently in the modern admin convention) |
 
 Status colors are paired (`--status-X` for the foreground and
 `--status-X-soft` for the background of badges/pills). Pick a pair instead
@@ -54,13 +56,17 @@ of inventing new colors so screens stay scannable.
 
 | Token | Default value | Use for |
 |-------|---------------|---------|
-| `--font-sans` | `system-ui, …` | All UI text |
+| `--font-sans` | `Inter, system-ui, …` | All UI text |
 | `--font-mono` | `ui-monospace, …` | Code, diffs, action keys (`device.create`) |
 | `--font-size-xs` | 0.75rem | Captions, badges |
 | `--font-size-sm` | 0.85rem | Secondary metadata, table cells |
 | `--font-size-md` | 0.95rem | Body |
 | `--font-size-lg` | 1.1rem | Section headings |
 | `--font-size-xl` | 1.4rem | Page title |
+
+Inter is preferred when installed locally on the user's machine and falls
+back to the platform sans-serif. The font is **not** bundled or fetched
+from a CDN — the embedded UI keeps its zero-dependency property.
 
 ## Spacing
 
@@ -69,11 +75,11 @@ prefer the scale over hand-rolled values to keep rhythms consistent.
 
 ## Radii, shadows, motion
 
-* `--radius-sm` (4 px) — inputs, badges, dense controls
-* `--radius-md` (6 px) — cards, modals
-* `--radius-lg` (10 px) — overlay sheets
-* `--shadow-sm` — resting cards
-* `--shadow-md` — hovered cards
+* `--radius-sm` (6 px) — inputs, badges, dense controls
+* `--radius-md` (8 px) — cards, modals
+* `--radius-lg` (12 px) — overlay sheets, the sign-in card
+* `--shadow-sm` — resting cards, the sticky top bar
+* `--shadow-md` — hovered cards, modals
 * `--transition-fast` (120 ms ease) — hover/focus feedback
 
 ## Components
@@ -93,13 +99,16 @@ The shared CSS recipes live in `app.css` and are consumed by name in
 
 ## Layout shell
 
-* **Top bar** holds the brand title, the current user, the API-docs link,
-  the theme toggle and Log out. Reserved for global actions.
-* **Sidebar** holds the seven primary sections (Inventory, Backups,
-  Compliance, Topology, Approvals, Audit, Settings). Each item is a small
-  inline-SVG icon plus a label; the active item gets the accent border-left
-  marker. The sidebar collapses to icons-only on screens narrower than
-  720 px and exposes `data-collapsed='true'` for a future manual toggle.
+* **Top bar** is a light surface (`--topbar-bg`) with a subtle bottom
+  shadow that stays sticky while the page scrolls. It holds a gradient
+  brand mark + wordmark, the current user, the API-docs link, the theme
+  toggle and Log out. Reserved for global actions.
+* **Sidebar** is a deep slate panel (`--sidebar-bg`) holding the eight
+  primary sections (Dashboard, Inventory, Backups, Compliance, Topology,
+  Approvals, Audit, Settings). Each item is a small inline-SVG icon plus
+  a label; the active item is rendered as a filled accent pill. The
+  sidebar collapses to icons-only on screens narrower than 720 px and
+  exposes `data-collapsed='true'` for a future manual toggle.
 * **Content area** is rendered by `app.js` based on the URL hash
   (`#/inventory`, `#/audit`, …). Each view module is a single function
   that takes the root element and renders into it.
