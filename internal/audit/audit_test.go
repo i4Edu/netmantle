@@ -90,8 +90,12 @@ func TestListSinceUntil(t *testing.T) {
 	ctx := context.Background()
 
 	s.Record(ctx, 1, 1, SourceAPI, "a", "", "")
+	// created_at is stored as RFC3339 (second precision) to match
+	// existing audit rows for correct lexicographic comparisons; sleep
+	// over one second so the second event lands in a later bucket.
+	time.Sleep(1100 * time.Millisecond)
 	mid := time.Now().UTC()
-	time.Sleep(5 * time.Millisecond)
+	time.Sleep(1100 * time.Millisecond)
 	s.Record(ctx, 1, 1, SourceAPI, "b", "", "")
 
 	got, err := s.List(ctx, ListFilter{TenantID: 1, Since: mid})

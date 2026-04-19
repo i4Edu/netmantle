@@ -151,10 +151,25 @@ func TestAuditAndCredentialSecret(t *testing.T) {
 		"/api/v1/audit?user=abc",
 		"/api/v1/audit?since=not-a-date",
 		"/api/v1/audit?limit=-1",
+		"/api/v1/audit?limit=501", // above documented max
 	} {
 		resp, _ = c.Get(srv.URL + bad)
 		if resp.StatusCode != 400 {
 			t.Fatalf("%s: want 400, got %s", bad, resp.Status)
+		}
+		resp.Body.Close()
+	}
+
+	// since/until accept both RFC3339 and RFC3339Nano (the UI sends the
+	// latter via Date.toISOString()).
+	for _, ok := range []string{
+		"/api/v1/audit?since=2026-01-01T00:00:00Z",
+		"/api/v1/audit?since=2026-01-01T00:00:00.123Z",
+		"/api/v1/audit?until=2026-01-01T00:00:00.123456789Z",
+	} {
+		resp, _ = c.Get(srv.URL + ok)
+		if resp.StatusCode != 200 {
+			t.Fatalf("%s: want 200, got %s", ok, resp.Status)
 		}
 		resp.Body.Close()
 	}

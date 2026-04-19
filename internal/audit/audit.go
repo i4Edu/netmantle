@@ -63,7 +63,7 @@ func (s *Service) Record(ctx context.Context, tenantID, actorUserID int64, sourc
 	if s == nil || s.DB == nil {
 		return
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := time.Now().UTC().Format(time.RFC3339)
 	var t, u any
 	if tenantID > 0 {
 		t = tenantID
@@ -117,11 +117,11 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]Entry, error) {
 	}
 	if !f.Since.IsZero() {
 		where = append(where, "created_at >= ?")
-		args = append(args, f.Since.UTC().Format(time.RFC3339Nano))
+		args = append(args, f.Since.UTC().Format(time.RFC3339))
 	}
 	if !f.Until.IsZero() {
 		where = append(where, "created_at <= ?")
-		args = append(args, f.Until.UTC().Format(time.RFC3339Nano))
+		args = append(args, f.Until.UTC().Format(time.RFC3339))
 	}
 	limit := f.Limit
 	if limit <= 0 || limit > 500 {
@@ -163,9 +163,11 @@ func (s *Service) List(ctx context.Context, f ListFilter) ([]Entry, error) {
 			v := actorID.Int64
 			e.ActorUserID = &v
 		}
-		e.CreatedAt, _ = time.Parse(time.RFC3339Nano, ts)
+		e.CreatedAt, _ = time.Parse(time.RFC3339, ts)
 		if e.CreatedAt.IsZero() {
-			e.CreatedAt, _ = time.Parse(time.RFC3339, ts)
+			// Tolerate any historical rows that may have been written
+			// with sub-second precision before the format was unified.
+			e.CreatedAt, _ = time.Parse(time.RFC3339Nano, ts)
 		}
 		out = append(out, e)
 	}

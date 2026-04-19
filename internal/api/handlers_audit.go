@@ -43,7 +43,7 @@ func (s *server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 		f.Target = v
 	}
 	if v := q.Get("since"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
+		t, err := parseRFC3339Loose(v)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid since (want RFC3339)")
 			return
@@ -51,7 +51,7 @@ func (s *server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 		f.Since = t
 	}
 	if v := q.Get("until"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
+		t, err := parseRFC3339Loose(v)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid until (want RFC3339)")
 			return
@@ -60,7 +60,7 @@ func (s *server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	if v := q.Get("limit"); v != "" {
 		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
+		if err != nil || n <= 0 || n > 500 {
 			writeError(w, http.StatusBadRequest, "invalid limit (must be a positive integer, max 500)")
 			return
 		}
@@ -84,4 +84,14 @@ func (s *server) handleListAudit(w http.ResponseWriter, r *http.Request) {
 		out = []audit.Entry{}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// parseRFC3339Loose accepts both RFC3339 and RFC3339Nano. The Audit page
+// builds bounds via Date.toISOString() which always emits milliseconds, so
+// strict RFC3339 parsing would reject every UI-driven request.
+func parseRFC3339Loose(v string) (time.Time, error) {
+	if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
+		return t, nil
+	}
+	return time.Parse(time.RFC3339, v)
 }

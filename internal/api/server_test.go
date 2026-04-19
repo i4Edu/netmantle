@@ -53,15 +53,17 @@ func newTestServer(t *testing.T) (*httptest.Server, string) {
 		})
 		return sess, func() error { return nil }, nil
 	}
+	auditSvc := audit.New(db, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	bSvc := backup.New(devRepo, credRepo, store, db,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 		2*time.Second, 2, factory)
+	bSvc.Audit = auditSvc
 
 	h := NewServer(Deps{
 		Auth: authSvc, Devices: devRepo, Credentials: credRepo,
 		Backup: bSvc, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Metrics: observability.New(),
-		Audit:   audit.New(db, slog.New(slog.NewTextHandler(io.Discard, nil))),
+		Audit:   auditSvc,
 	})
 	return httptest.NewServer(h), pw
 }

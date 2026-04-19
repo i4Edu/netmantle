@@ -135,8 +135,10 @@ func runServe(argv []string) error {
 			Username: user, Password: pw, Timeout: cfg.Backup.Timeout,
 		})
 	}
+	auditSvc := audit.New(db, log)
 	bSvc := backup.New(devRepo, credRepo, store, db, log,
 		cfg.Backup.Timeout, cfg.Backup.Workers, sessionFactory)
+	bSvc.Audit = auditSvc
 
 	// Phase 2..10 services.
 	chgSvc := changes.New(db, store, &diff.Engine{Rules: diff.DefaultRules()})
@@ -206,7 +208,6 @@ func runServe(argv []string) error {
 	}
 
 	metrics := observability.New()
-	auditSvc := audit.New(db, log)
 	handler := api.NewServer(api.Deps{
 		Auth: authSvc, Devices: devRepo, Credentials: credRepo,
 		Backup: bSvc, Logger: log, Metrics: metrics, Audit: auditSvc,
