@@ -19,7 +19,7 @@ What's in the box:
 | Phase | Capability |
 |-------|------------|
 | 0 | Foundation: Go module, CI, config, logging, SQLite + migrations, envelope-encrypted secrets, local auth + RBAC, Prometheus metrics, Docker image, Helm chart |
-| 1 | Inventory CRUD, SSH transport, Cisco IOS / IOS-XR / NX-OS / Arista EOS / Junos / MikroTik / Nokia SR OS / Huawei VRP / FortiOS / Palo Alto PAN-OS / generic-SSH drivers (plus BDCOM, DBC and VSOL ONT/OLT drivers), git-backed config store, BackupNow + run history, embedded web UI, OpenAPI + Swagger UI |
+| 1 | Inventory CRUD, SSH transport, ~20 device drivers ([driver matrix](DRIVERS.md)) including Cisco IOS / IOS-XR / NX-OS, Arista EOS, Junos, MikroTik, Nokia SR OS, Huawei VRP, FortiOS, Palo Alto PAN-OS, plus generic SSH and ONT/OLT drivers; git-backed config store, BackupNow + run history, embedded web UI, OpenAPI + Swagger UI |
 | 2 | Diff engine with platform-aware ignore rules, ChangeEvent recording, notification channels (webhook / Slack / SMTP) and rules |
 | 3 | SQLite-FTS5 search across all stored configs, saved searches, CSV export of changes |
 | 4 | Compliance rule engine (regex / must-include / must-exclude / ordered-block), findings, transition-only notifications |
