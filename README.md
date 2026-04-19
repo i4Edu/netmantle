@@ -47,6 +47,16 @@ The bootstrap admin password is printed once on first start, or pre-seeded via
 
 ![Sign-in screen](https://github.com/user-attachments/assets/799a59e0-4728-4795-8b3e-efa979405802)
 
+### Dashboard
+
+Single-round-trip landing page: device totals with a 7-day delta, current
+compliance %, 24h backup success rate with a 14-day sparkline, the approvals
+queue, status-by-driver bars, drift hotspots, a recent-events timeline, and a
+pollers/git-mirror health card. All sections are best-effort — a sub-query
+failure zeroes that field but the response stays 200.
+
+![Dashboard with stat tiles, status-by-driver bars, recent events, and health card](https://github.com/user-attachments/assets/2f412ddd-db30-4c21-9a76-cdeaadf4923d)
+
 ### Empty dashboard (first login)
 
 Two-pane Inventory layout: the left rail lists devices and exposes the
