@@ -491,8 +491,9 @@ code { font-family: var(--font-mono); font-size: 0.85em; background: var(--surfa
 /* ===== Login Page ===== */
 #login-view {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  min-height: 100vh; padding: 24px; background: var(--surface-page);
+  min-height: calc(100vh - 48px); padding: 24px; background: var(--surface-page);
 }
+body:has(#login-view:not([hidden])) { overflow: auto; }
 .login-brand { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
 .login-brand .brand-mark svg { width: 36px; height: 36px; color: var(--accent); }
 .login-brand h2 { font-size: 1.2rem; font-weight: 700; color: var(--text-strong); }
