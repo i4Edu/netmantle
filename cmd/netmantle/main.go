@@ -264,10 +264,40 @@ func runServe(argv []string) error {
 		}
 		return backend, nil
 	})
-	automationSvc := automation.New(db, devRepo, func(ctx context.Context, d devices.Device, _ string) (string, error) {
-		// Live execution requires a per-driver Apply hook; this MVP returns
-		// a clear error so users can still use Preview + GroupResults.
-		return "", errors.New("automation: live execution requires per-driver Apply (Phase 6 follow-up)")
+	automationSvc := automation.New(db, devRepo, func(ctx context.Context, d devices.Device, config string) (string, error) {
+		if d.CredentialID == nil {
+			return "", fmt.Errorf("automation: device %q (id %d) has no credential", d.Hostname, d.ID)
+		}
+		var output string
+		err := credRepo.Use(ctx, d.TenantID, *d.CredentialID, func(user, pw string) error {
+			driverLower := strings.ToLower(d.Driver)
+			var factory func(context.Context, devices.Device, string, string) (drivers.Session, func() error, error)
+			switch {
+			case strings.Contains(driverLower, "restconf"):
+				factory = restconfFactory
+			case strings.Contains(driverLower, "gnmi"):
+				factory = gnmiFactory
+			case strings.Contains(driverLower, "netconf"):
+				factory = netconfFactory
+			default:
+				factory = sessionFactory
+			}
+			sess, closer, serr := factory(ctx, d, user, pw)
+			if serr != nil {
+				return serr
+			}
+			defer closer() //nolint:errcheck
+			out, rerr := sess.Run(ctx, config)
+			if rerr != nil {
+				return rerr
+			}
+			output = out
+			return nil
+		})
+		if err != nil {
+			return "", err
+		}
+		return output, nil
 	})
 
 	// Wire post-backup hooks: detect changes, index for search, evaluate

@@ -12,11 +12,11 @@ scope for follow-up hardening.
 | 3 | Auditing & search | SQLite FTS5 search, saved searches, CSV export | Advanced indexing and large-scale search tuning |
 | 4 | Configuration compliance | Rules/rulesets/findings with transition notifications, **ISP/Cisco/MikroTik baseline rule packs** | Broader rule pack library and richer remediation workflows |
 | 5 | Discovery & NMS sync | TCP/banner scan and NetBox JSON import | SNMP enrichment and LibreNMS/Zabbix synchronization |
-| 6 | Push/pull automation | Push-job CRUD, template rendering, preview, grouped results | Per-driver `Apply()` execution path (currently preview-only) |
+| 6 | Push/pull automation | Push-job CRUD, template rendering, preview, grouped results, **per-driver `Apply()` live execution via transport routing** | — |
 | 7 | In-app CLI & distributed pollers | Web terminal transcript/audit, poller registration + heartbeat, **poller job queue** (`poller_jobs` schema, idempotent enqueue/claim/complete/reclaim), **gRPC wire-protocol contract** (`.proto` + Go service interface), **wire-level poller core adapter** (authenticate/claim/report with tenant-verified claim + ownership checks), **dedicated gRPC+mTLS listener shell** | Full poller RPC registration + remote execution hardening |
 | 8 | Runtime state auditing & compliance | Probe framework and runtime checks | Broader probe library and policy packs |
 | 9 | Multi-tenancy & HA | Tenant CRUD, quotas, leader-elected scheduler, Helm chart, **extended HA failover tests** (split-brain prevention, leader handoff timeliness, rapid leadership-change stability) | Automated scale testing and HA chaos framework |
-| 10 | Hardening + modern transports + topology + GitOps mirror | NETCONF helpers, LLDP/CDP topology API + UI canvas renderer, GitOps mirror, signed release + SBOM workflow, **NETCONF-over-SSH drivers hardened** (`cisco_netconf`, `junos_netconf`), **RESTCONF + gNMI native transports wired** (`restconf`, `gnmi`), **SSH known-hosts persistence** (closes threat-model T7), **DBKnownHostsStore failover validation suite**, **webhook/Slack URL sealing** (closes T7+T10), **topology API versioning** (`api_version`, `node_count`, `edge_count`, `?limit=`) | Per-driver `Apply()`, full poller RPC registration/hardening |
+| 10 | Hardening + modern transports + topology + GitOps mirror | NETCONF helpers, LLDP/CDP topology API + UI canvas renderer, GitOps mirror, signed release + SBOM workflow, **NETCONF-over-SSH drivers hardened** (`cisco_netconf`, `junos_netconf`), **RESTCONF + gNMI native transports wired** (`restconf`, `gnmi`), **SSH known-hosts persistence** (closes threat-model T7), **DBKnownHostsStore failover validation suite**, **webhook/Slack URL sealing** (closes T7+T10), **topology API versioning** (`api_version`, `node_count`, `edge_count`, `?limit=`) | Full poller RPC registration/hardening |
 
 ## Immediate next actions
 
@@ -96,7 +96,7 @@ block the 1.0‑RC1 tag.
 
 ### Post‑RC1 follow‑ups
 
-- **Automation `Apply()` live execution** — per‑driver push path (Phase 6).
+- ~~**Automation `Apply()` live execution** — per‑driver push path (Phase 6).~~ ✅ Shipped: transport-routed executor (SSH/NETCONF/RESTCONF/gNMI) wired in `cmd/netmantle/main.go`.
 - **HA chaos/scale validation** — gRPC session chaos tests, 1 000+ concurrent
   device scale validation (Phase 9 follow‑up).
 - **Additional rule packs** — Junos/Nokia/Huawei compliance baselines, UI
