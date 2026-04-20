@@ -40,12 +40,12 @@ scope for follow-up hardening.
 
 ### Driver coverage
 
-- Keep current hardened CLI coverage for Cisco/Arista/Junos/MikroTik (+ Nokia,
-  BDCOM, V-SOL, DBC).
-- Add additional widely used vendors in staged order:
-  1. Fortinet
-  2. Palo Alto
-  3. Huawei
+- ~~Add additional widely used vendors~~ ✅ Shipped: Fortinet FortiOS,
+  Palo Alto PAN-OS, and Huawei VRP are now hardened CLI drivers in
+  `internal/drivers/builtin/builtin.go` (see `/DRIVERS.md`).
+- Hardened CLI coverage now spans Cisco IOS/NX-OS/IOS-XR, Arista EOS,
+  Juniper Junos, MikroTik RouterOS, Nokia SR OS, Huawei VRP, Fortinet
+  FortiOS, Palo Alto PAN-OS, BDCOM, V-SOL, and DBC.
 - Keep status explicit in `/DRIVERS.md` as either **stub** or **hardened**.
 
 ### Testing & CI/CD
