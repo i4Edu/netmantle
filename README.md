@@ -15,8 +15,8 @@ persistence, container and Helm packaging, signed releases, and an SBOM with
 every tag.
 
 > **Status:** pre‑1.0. Phases 0–10 of the project plan are landed; remaining
-> hardening items (full gRPC poller wire server + mTLS, expanded driver/rule
-> packs, automation `Apply()` execution, HA chaos/scale validation) are tracked explicitly in
+> hardening items (expanded driver/rule packs, automation `Apply()` execution,
+> HA chaos/scale validation) are tracked explicitly in
 > [`docs/roadmap.md`](docs/roadmap.md). APIs and storage formats are not yet
 > frozen — see [SECURITY.md](SECURITY.md) for the current security posture.
 
@@ -47,8 +47,7 @@ every tag.
   `internal/drivers` and `internal/transport`. CLI drivers are hardened today
   for Cisco IOS/NX‑OS/IOS‑XR, Arista EOS, Juniper Junos, MikroTik RouterOS,
   Nokia SR OS, Huawei VRP, Fortinet FortiOS, Palo Alto PAN‑OS, BDCOM, V‑SOL,
-  and DBC; NETCONF capture is hardened, while RESTCONF / gNMI remain
-  registered scaffolded stubs until native transport wiring lands.
+  and DBC; NETCONF, RESTCONF, and gNMI capture paths are all wired.
 - **Git is the source of truth for configs** — every backup commits the
   artifact text into a per‑device git repository under
   `storage.config_repo_root`, so diff and history are first‑class.
@@ -74,10 +73,10 @@ items are usable today; *Follow‑up* items are tracked but not yet hardened.
 | 4 | Configuration compliance | Rules / rulesets / findings with transition notifications | Expanded rule packs, richer remediation |
 | 5 | Discovery & NMS sync | TCP / banner scan, NetBox JSON import | SNMP enrichment, LibreNMS / Zabbix sync |
 | 6 | Push / pull automation | Push‑job CRUD, template rendering, preview, grouped results | Per‑driver `Apply()` execution path (currently preview‑only) |
-| 7 | In‑app CLI & distributed pollers | Web terminal with transcript/audit, poller registration + heartbeat | Full gRPC poller wire protocol, remote execution hardening |
+| 7 | In‑app CLI & distributed pollers | Web terminal with transcript/audit, poller registration + heartbeat, mTLS gRPC listener shell | Full poller RPC method registration and remote execution hardening |
 | 8 | Runtime state auditing & compliance | Probe framework + runtime checks | Broader probe library and policy packs |
 | 9 | Multi‑tenancy & HA | Tenant CRUD, quotas, leader‑elected scheduler, Helm chart | Automated HA / failover validation, scale testing |
-| 10 | Hardening + modern transports + topology + GitOps mirror | NETCONF helpers, RESTCONF / gNMI stubs, LLDP/CDP topology API + graph-canvas renderer, GitOps mirror, signed release + SBOM workflow | Full RESTCONF / gNMI backup wiring, per-driver `Apply()` execution path, full gRPC poller wire server, additional transport hardening |
+| 10 | Hardening + modern transports + topology + GitOps mirror | NETCONF helpers, RESTCONF + gNMI native backup wiring, LLDP/CDP topology API + graph-canvas renderer, GitOps mirror, signed release + SBOM workflow | Per-driver `Apply()` execution path, additional transport hardening |
 
 ## Architecture at a glance
 
@@ -106,8 +105,8 @@ items are usable today; *Follow‑up* items are tracked but not yet hardened.
 - Configuration history is stored as plain text in per‑device git repositories
   rooted at `storage.config_repo_root`.
 - Distributed pollers can register/heartbeat and use the wire-level
-  authenticate/claim/report core adapter today; the full gRPC+mTLS server
-  endpoint is still follow-up hardening.
+  authenticate/claim/report core adapter today; the dedicated gRPC+mTLS
+  listener shell is now available for remote poller connectivity.
 
 For the deep dive read [`ARCHITECTURE.md`](ARCHITECTURE.md) (reviewer summary)
 and [`docs/architecture.md`](docs/architecture.md) (package‑level design).

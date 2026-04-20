@@ -280,12 +280,13 @@ func TestHuaweiVRP(t *testing.T) {
 	}
 }
 
-func TestModelDrivenDriversRemainScaffolded(t *testing.T) {
+func TestModelDrivenDriversFetchConfig(t *testing.T) {
 	cases := []struct {
-		driver string
+		driver   string
+		artifact string
 	}{
-		{driver: "restconf"},
-		{driver: "gnmi"},
+		{driver: "restconf", artifact: "restconf-config"},
+		{driver: "gnmi", artifact: "gnmi-config"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.driver, func(t *testing.T) {
@@ -293,12 +294,15 @@ func TestModelDrivenDriversRemainScaffolded(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = d.FetchConfig(context.Background(), fakesession.New(nil))
-			if err == nil {
-				t.Fatal("expected scaffolded error")
+			sess := fakesession.New(map[string]string{
+				"get-config:running": `{"ok":true}`,
+			})
+			arts, err := d.FetchConfig(context.Background(), sess)
+			if err != nil {
+				t.Fatalf("FetchConfig: %v", err)
 			}
-			if !strings.Contains(err.Error(), "scaffolded") {
-				t.Fatalf("expected scaffolded error message, got %v", err)
+			if len(arts) != 1 || arts[0].Name != tc.artifact {
+				t.Fatalf("unexpected artifacts: %+v", arts)
 			}
 		})
 	}

@@ -34,12 +34,17 @@ type Service struct {
 	NewSession  SessionFactory
 
 	// NetconfSession, when non-nil, is used for devices whose driver name
-	// exactly matches one of: "cisco_netconf", "junos_netconf", "restconf",
-	// or "gnmi". It receives the same (ctx, device, user, pass) arguments
-	// and must return a drivers.Session that understands NETCONF/RESTCONF/gNMI
-	// command semantics (e.g. "get-config:running").
-	// When nil, the NETCONF/RESTCONF/gNMI stub error is preserved.
+	// exactly matches "cisco_netconf" or "junos_netconf". It receives the
+	// same (ctx, device, user, pass) arguments and must return a
+	// drivers.Session that understands NETCONF command semantics
+	// (e.g. "get-config:running").
 	NetconfSession SessionFactory
+
+	// RestconfSession, when non-nil, is used for "restconf" drivers.
+	RestconfSession SessionFactory
+
+	// GNMISession, when non-nil, is used for "gnmi" drivers.
+	GNMISession SessionFactory
 
 	// Audit, when set, is used for all audit_log writes so the format
 	// stays consistent with the rest of the codebase (see internal/audit).
@@ -154,12 +159,8 @@ func (s *Service) BackupNow(ctx context.Context, tenantID, deviceID int64, actor
 	bctx, cancel := context.WithTimeout(ctx, s.Timeout)
 	defer cancel()
 
-	// Route NETCONF/RESTCONF/gNMI devices through the dedicated factory when
-	// one has been configured; otherwise fall back to the CLI session factory.
-	factory := s.NewSession
-	if s.NetconfSession != nil && isNetconfDriver(dev.Driver) {
-		factory = s.NetconfSession
-	}
+	// Route model-driven transports through dedicated factories when provided.
+	factory := s.sessionFactoryForDriver(dev.Driver)
 	sess, closer, err := factory(bctx, dev, username, secret)
 	if err != nil {
 		finalize("failed", "session: "+err.Error(), "")
@@ -309,14 +310,31 @@ func nullIfEmpty(s string) any {
 	return s
 }
 
-// isNetconfDriver reports whether the named driver uses a NETCONF / RESTCONF /
-// gNMI session rather than a CLI shell session.
-func isNetconfDriver(name string) bool {
+func (s *Service) sessionFactoryForDriver(name string) SessionFactory {
 	switch name {
-	case "cisco_netconf", "junos_netconf", "restconf", "gnmi":
-		return true
+	case "cisco_netconf", "junos_netconf":
+		if s.NetconfSession != nil {
+			return s.NetconfSession
+		}
+		return missingSessionFactory("netconf", name)
+	case "restconf":
+		if s.RestconfSession != nil {
+			return s.RestconfSession
+		}
+		return missingSessionFactory("restconf", name)
+	case "gnmi":
+		if s.GNMISession != nil {
+			return s.GNMISession
+		}
+		return missingSessionFactory("gnmi", name)
 	}
-	return false
+	return s.NewSession
+}
+
+func missingSessionFactory(transportName, driverName string) SessionFactory {
+	return func(_ context.Context, _ devices.Device, _, _ string) (drivers.Session, func() error, error) {
+		return nil, nil, fmt.Errorf("backup: %s session factory is not configured for driver %q", transportName, driverName)
+	}
 }
 
 // Compile-time assertion: Service is safe for concurrent BackupNow calls

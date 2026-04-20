@@ -2,8 +2,10 @@ package backup
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -89,5 +91,36 @@ func TestBackupNowSuccess(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("audit rows: %d", n)
+	}
+}
+
+func TestSessionFactoryForModelDrivenDriversFailsFastWhenUnset(t *testing.T) {
+	svc := &Service{
+		NewSession: func(context.Context, devices.Device, string, string) (drivers.Session, func() error, error) {
+			return nil, nil, errors.New("cli fallback invoked")
+		},
+	}
+	cases := []struct {
+		driver          string
+		expectedMessage string
+	}{
+		{driver: "cisco_netconf", expectedMessage: "netconf session factory"},
+		{driver: "restconf", expectedMessage: "restconf session factory"},
+		{driver: "gnmi", expectedMessage: "gnmi session factory"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.driver, func(t *testing.T) {
+			factory := svc.sessionFactoryForDriver(tc.driver)
+			_, _, err := factory(context.Background(), devices.Device{}, "", "")
+			if err == nil {
+				t.Fatal("expected missing-factory error")
+			}
+			if !strings.Contains(err.Error(), tc.expectedMessage) {
+				t.Fatalf("expected error containing %q, got %v", tc.expectedMessage, err)
+			}
+			if strings.Contains(err.Error(), "cli fallback invoked") {
+				t.Fatalf("unexpected fallback call: %v", err)
+			}
+		})
 	}
 }

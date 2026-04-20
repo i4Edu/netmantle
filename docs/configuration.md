@@ -47,6 +47,13 @@ logging:
 backup:
   timeout: "60s"          # per-device backup timeout
   workers: 4              # max concurrent backup workers
+
+poller:
+  grpc:
+    address: ""                # empty disables gRPC listener shell
+    tls_cert_file: ""          # required when address is set
+    tls_key_file: ""           # required when address is set
+    tls_client_ca_file: ""     # required when address is set (mTLS)
 ```
 
 ## Environment variables
@@ -66,6 +73,10 @@ Only the variables in the table below are honoured. Anything else with the
 | `NETMANTLE_LOGGING_FORMAT` | `logging.format` | `text` / `json` |
 | `NETMANTLE_BACKUP_WORKERS` | `backup.workers` | integer |
 | `NETMANTLE_BACKUP_TIMEOUT` | `backup.timeout` | Go duration, e.g. `60s`, `2m` |
+| `NETMANTLE_POLLER_GRPC_ADDRESS` | `poller.grpc.address` | e.g. `:9443`; enables poller gRPC listener shell |
+| `NETMANTLE_POLLER_GRPC_TLS_CERT_FILE` | `poller.grpc.tls_cert_file` | server certificate path for poller gRPC mTLS |
+| `NETMANTLE_POLLER_GRPC_TLS_KEY_FILE` | `poller.grpc.tls_key_file` | server private key path for poller gRPC mTLS |
+| `NETMANTLE_POLLER_GRPC_TLS_CLIENT_CA_FILE` | `poller.grpc.tls_client_ca_file` | client CA bundle for mTLS verification |
 
 There is also one *startup‑only* env var consumed by `cmd/netmantle/main.go`:
 
@@ -123,6 +134,15 @@ There is also one *startup‑only* env var consumed by `cmd/netmantle/main.go`:
 - **`timeout`** — per‑device timeout; also passed to the SSH dial.
 - **`workers`** — concurrency cap for backup runs. Increase carefully:
   every worker holds an SSH session and a transient git working tree.
+
+### `poller.grpc`
+
+- **`address`** — optional bind address for the distributed-poller gRPC
+  listener shell. Leave empty to disable the listener entirely.
+- **`tls_cert_file` / `tls_key_file` / `tls_client_ca_file`** — mandatory
+  when `poller.grpc.address` is set. NetMantle enforces mutual TLS
+  (`RequireAndVerifyClientCert`) so only pollers with certificates signed by
+  the configured client CA can complete the handshake.
 
 ## Secret handling
 

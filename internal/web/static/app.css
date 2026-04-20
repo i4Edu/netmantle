@@ -138,10 +138,14 @@ main h3 {
 /* ---------- card system ---------- */
 .card {
   background: var(--surface-card);
+  background: color-mix(in srgb, var(--surface-card) 78%, transparent);
   border: 1px solid var(--border-default);
+  border: 1px solid color-mix(in srgb, var(--border-default) 70%, transparent);
   border-radius: var(--radius-md);
   padding: var(--space-4);
   box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 .card + .card { margin-top: var(--space-4); }
 .card-grid {
@@ -412,7 +416,9 @@ pre.config {
 }
 .dash-stat {
   background: var(--surface-card);
+  background: color-mix(in srgb, var(--surface-card) 72%, transparent);
   border: 1px solid var(--border-default);
+  border: 1px solid color-mix(in srgb, var(--border-default) 65%, transparent);
   border-radius: var(--radius-md);
   padding: var(--space-4);
   display: flex;
@@ -422,6 +428,8 @@ pre.config {
   position: relative;
   overflow: hidden;
   transition: box-shadow var(--transition-fast), transform var(--transition-fast);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 .dash-stat::before {
   content: "";
@@ -591,9 +599,13 @@ pre.config {
 .topo-wrap {
   position: relative;
   border: 1px solid var(--border-default);
+  border: 1px solid color-mix(in srgb, var(--border-default) 60%, transparent);
   border-radius: var(--radius-md);
   background: var(--surface-card);
+  background: color-mix(in srgb, var(--surface-card) 70%, transparent);
   overflow: hidden;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 .topo-wrap svg { width: 100%; height: 540px; display: block; cursor: grab; }
 .topo-wrap svg:active { cursor: grabbing; }
@@ -601,7 +613,9 @@ pre.config {
   position: absolute;
   top: var(--space-2); left: var(--space-2);
   background: var(--surface-card);
+  background: color-mix(in srgb, var(--surface-card) 65%, transparent);
   border: 1px solid var(--border-default);
+  border: 1px solid color-mix(in srgb, var(--border-default) 55%, transparent);
   border-radius: var(--radius-sm);
   padding: var(--space-1) var(--space-3);
   font-size: var(--font-size-xs);
@@ -609,6 +623,8 @@ pre.config {
   display: flex;
   gap: var(--space-3);
   align-items: center;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 .topo-wrap .topo-stats {
   left: auto;
@@ -626,10 +642,14 @@ pre.config {
   top: 0; right: 0; bottom: 0;
   width: 280px;
   background: var(--surface-card);
+  background: color-mix(in srgb, var(--surface-card) 72%, transparent);
   border-left: 1px solid var(--border-default);
+  border-left: 1px solid color-mix(in srgb, var(--border-default) 60%, transparent);
   padding: var(--space-3);
   overflow-y: auto;
   font-size: var(--font-size-sm);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
 }
 .topo-node circle { stroke: var(--text-strong); stroke-width: 1.5; cursor: pointer; }
 .topo-node circle.ok   { fill: var(--status-ok); }

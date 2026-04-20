@@ -6,7 +6,8 @@
 // zone, claim work from the queue, and report results. This package ships
 // the persistence layer for that protocol — registration with a
 // bcrypt-hashed bootstrap token, heartbeat tracking, and tenant-scoped
-// listing — leaving the on-the-wire gRPC implementation as a follow-up.
+// listing. The dedicated gRPC+mTLS listener shell is now present under
+// internal/server; full RPC method registration is tracked separately.
 package poller
 
 import (

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -39,6 +40,7 @@ import (
 	"github.com/i4Edu/netmantle/internal/probes"
 	"github.com/i4Edu/netmantle/internal/scheduler"
 	"github.com/i4Edu/netmantle/internal/search"
+	grpcserver "github.com/i4Edu/netmantle/internal/server"
 	"github.com/i4Edu/netmantle/internal/storage"
 	"github.com/i4Edu/netmantle/internal/tenants"
 	"github.com/i4Edu/netmantle/internal/terminal"
@@ -167,11 +169,55 @@ func runServe(argv []string) error {
 		return sess, closer, nil
 	}
 
+	restconfFactory := func(ctx context.Context, d devices.Device, user, pw string) (drivers.Session, func() error, error) {
+		bearer := ""
+		if strings.EqualFold(strings.TrimSpace(user), "bearer") || strings.EqualFold(strings.TrimSpace(user), "token") {
+			bearer = pw
+			user = ""
+			pw = ""
+		}
+		sess, closer, err := transport.DialRESTCONF(ctx, transport.RESTCONFConfig{
+			Address:     d.Address,
+			Port:        d.Port,
+			Username:    user,
+			Password:    pw,
+			BearerToken: bearer,
+			Timeout:     cfg.Backup.Timeout,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		return sess, closer, nil
+	}
+
+	gnmiFactory := func(ctx context.Context, d devices.Device, user, pw string) (drivers.Session, func() error, error) {
+		bearer := ""
+		if strings.EqualFold(strings.TrimSpace(user), "bearer") || strings.EqualFold(strings.TrimSpace(user), "token") {
+			bearer = pw
+			user = ""
+			pw = ""
+		}
+		sess, closer, err := transport.DialGNMI(ctx, transport.GNMIConfig{
+			Address:     d.Address,
+			Port:        d.Port,
+			Username:    user,
+			Password:    pw,
+			BearerToken: bearer,
+			Timeout:     cfg.Backup.Timeout,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		return sess, closer, nil
+	}
+
 	auditSvc := audit.New(db, log)
 	bSvc := backup.New(devRepo, credRepo, store, db, log,
 		cfg.Backup.Timeout, cfg.Backup.Workers, sessionFactory)
 	bSvc.Audit = auditSvc
 	bSvc.NetconfSession = netconfFactory
+	bSvc.RestconfSession = restconfFactory
+	bSvc.GNMISession = gnmiFactory
 
 	// Phase 2..10 services.
 	chgSvc := changes.New(db, store, &diff.Engine{Rules: diff.DefaultRules()})
@@ -182,6 +228,8 @@ func runServe(argv []string) error {
 	probesSvc := probes.New(db)
 	tenantsSvc := tenants.New(db)
 	pollerSvc := poller.New(db)
+	pollerJobsSvc := poller.NewJobService(db)
+	wireSvc := poller.NewWireService(pollerSvc, pollerJobsSvc)
 	gitopsSvc := gitops.New(db, store, sealer)
 	terminalSvc := terminal.New(db, func(ctx context.Context, tenantID, deviceID int64) (terminal.Backend, error) {
 		dev, err := devRepo.GetDevice(ctx, tenantID, deviceID)
@@ -306,12 +354,34 @@ func runServe(argv []string) error {
 			stop()
 		}
 	}()
+	var grpcSrv *grpcserver.GRPCServer
+	if cfg.Poller.GRPC.Address != "" {
+		gs, err := grpcserver.NewGRPCServer(grpcserver.GRPCConfig{
+			Address:         cfg.Poller.GRPC.Address,
+			TLSCertFile:     cfg.Poller.GRPC.TLSCertFile,
+			TLSKeyFile:      cfg.Poller.GRPC.TLSKeyFile,
+			TLSClientCAFile: cfg.Poller.GRPC.TLSClientCAFile,
+		}, wireSvc, log)
+		if err != nil {
+			return err
+		}
+		grpcSrv = gs
+		go func() {
+			if err := grpcSrv.Start(ctx); err != nil {
+				log.Error("poller grpc server error", "err", err)
+				stop()
+			}
+		}()
+	}
 	<-ctx.Done()
 	log.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		return err
+	}
+	if grpcSrv != nil {
+		grpcSrv.Shutdown(5 * time.Second)
 	}
 	_ = slog.Default()
 	return nil
