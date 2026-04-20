@@ -60,6 +60,8 @@ type Group struct {
 	Devices  []string `json:"devices"`
 }
 
+const auditErrorMaxLen = 160
+
 // Service owns Job CRUD + execution.
 type Service struct {
 	DB      *sql.DB
@@ -357,9 +359,8 @@ func sanitizeAuditError(msg string) string {
 	msg = strings.ReplaceAll(msg, "\n", " ")
 	msg = strings.ReplaceAll(msg, "\r", " ")
 	// Keep details compact for audit table readability in UI/API responses.
-	const maxLen = 160
-	if len(msg) > maxLen {
-		msg = msg[:maxLen] + "..."
+	if len(msg) > auditErrorMaxLen {
+		msg = msg[:auditErrorMaxLen] + "..."
 	}
 	return msg
 }

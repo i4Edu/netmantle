@@ -13,6 +13,8 @@ import (
 	"github.com/i4Edu/netmantle/internal/storage"
 )
 
+const claimRetryMaxAttempts = 500
+
 func BenchmarkClaimLatency1000Pollers10000Queue(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_, p95 := runClaimScaleScenario(b, 1000, 10000)
@@ -80,7 +82,7 @@ func runClaimScaleScenario(t tb, pollerCount, queueSize int) ([]int64, time.Dura
 				job poller.Job
 				err error
 			)
-			for attempt := 0; attempt < 500; attempt++ {
+			for attempt := 0; attempt < claimRetryMaxAttempts; attempt++ {
 				job, err = jobs.Claim(context.Background(), 1, id, []poller.JobType{poller.JobTypeBackup})
 				if err == nil {
 					break

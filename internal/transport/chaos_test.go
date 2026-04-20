@@ -225,26 +225,26 @@ type testDelayedJobService struct {
 	reportDelay time.Duration
 }
 
-func (dw testDelayedJobService) Claim(ctx context.Context, tenantID, pollerID int64, supportedTypes []poller.JobType) (poller.Job, error) {
-	if dw.claimDelay > 0 {
+func (delayed testDelayedJobService) Claim(ctx context.Context, tenantID, pollerID int64, supportedTypes []poller.JobType) (poller.Job, error) {
+	if delayed.claimDelay > 0 {
 		select {
 		case <-ctx.Done():
 			return poller.Job{}, ctx.Err()
-		case <-time.After(dw.claimDelay):
+		case <-time.After(delayed.claimDelay):
 		}
 	}
-	return dw.delegate.Claim(ctx, tenantID, pollerID, supportedTypes)
+	return delayed.delegate.Claim(ctx, tenantID, pollerID, supportedTypes)
 }
 
-func (dw testDelayedJobService) CompleteClaimedBy(ctx context.Context, tenantID, pollerID, jobID int64, success bool, resultJSON, errMsg string) error {
-	if dw.reportDelay > 0 {
+func (delayed testDelayedJobService) CompleteClaimedBy(ctx context.Context, tenantID, pollerID, jobID int64, success bool, resultJSON, errMsg string) error {
+	if delayed.reportDelay > 0 {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(dw.reportDelay):
+		case <-time.After(delayed.reportDelay):
 		}
 	}
-	return dw.delegate.CompleteClaimedBy(ctx, tenantID, pollerID, jobID, success, resultJSON, errMsg)
+	return delayed.delegate.CompleteClaimedBy(ctx, tenantID, pollerID, jobID, success, resultJSON, errMsg)
 }
 
 func newWireChaosHarness(t *testing.T) (*sql.DB, *poller.WireService, *poller.Service, *poller.JobService) {
