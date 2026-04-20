@@ -3653,17 +3653,21 @@ views.search = (root) => {
     el('div', { class: 'page-header-left' },
       el('div', { class: 'page-header-breadcrumb' }, 'Automation & Intelligence'),
       el('div', { class: 'page-header-title' }, 'Config Search')),
-  );
+    el('div', { class: 'page-header-actions' },
+      el('span', { style: 'font-size:var(--font-size-xs);color:var(--text-muted)' }, 'Search across all device configurations')));
   root.appendChild(header);
 
-  const searchWrap = el('div', { style: 'display:flex;gap:8px;margin-bottom:20px;align-items:center' },
-    el('input', { type: 'search', id: 'cfg-search-input', placeholder: 'Search all device configs (VLAN ID, IP, hostname, password…)', style: 'flex:1;padding:9px 14px;border:1px solid var(--border-default);border-radius:var(--radius-pill);font-size:var(--font-size-sm);background:var(--surface-card);color:var(--text-default)' }),
-    el('button', { class: 'btn', id: 'cfg-search-btn' }, '🔍 Search'),
-  );
+  const searchWrap = el('div', { class: 'search-bar-wrap' },
+    el('input', { type: 'search', id: 'cfg-search-input', placeholder: 'Search all configs: VLAN 100, 192.168.1.1, password, ntp server…', autofocus: true }),
+    el('select', { id: 'cfg-search-scope' },
+      el('option', { value: 'all' }, 'All devices'),
+      el('option', { value: 'latest' }, 'Latest config only')),
+    el('button', { class: 'btn', id: 'cfg-search-btn' }, '🔍 Search'));
   root.appendChild(searchWrap);
 
+  const statsEl = el('div', { style: 'font-size:var(--font-size-xs);color:var(--text-muted);margin-bottom:12px', id: 'search-stats' });
   const results = el('div', { id: 'cfg-search-results' });
-  root.appendChild(results);
+  root.append(statsEl, results);
 
   if (window._globalSearchQuery) {
     $('#cfg-search-input').value = window._globalSearchQuery;
@@ -3675,30 +3679,65 @@ views.search = (root) => {
     const q = ($('#cfg-search-input') || { value: '' }).value.trim();
     if (!q) return;
     results.innerHTML = '<p class="muted">Searching…</p>';
+    statsEl.textContent = '';
     try {
       const hits = await api('GET', '/search?q=' + encodeURIComponent(q));
       results.innerHTML = '';
-      if (!hits || !hits.length) { results.innerHTML = '<p class="muted">No results found.</p>'; return; }
-      results.appendChild(el('p', { style: 'font-size:var(--font-size-xs);color:var(--text-muted);margin-bottom:12px' }, `${hits.length} result(s) for "${escapeHTML(q)}"`));
+      if (!hits || !hits.length) {
+        results.innerHTML = '<p class="muted">No results found for "' + escapeHTML(q) + '".</p>';
+        statsEl.textContent = '0 results';
+        return;
+      }
+      statsEl.textContent = `${hits.length} device(s) matched "${q}"`;
+
       for (const h of hits) {
         const card = el('div', { class: 'search-result' });
+        // Header row with device info
+        const badge = el('span', { class: 'badge ok', style: 'font-size:0.6rem' }, 'match');
         const hdr = el('div', { class: 'search-result-header' },
-          el('div', {},
+          el('div', { style: 'display:flex;align-items:center;gap:8px' },
+            badge,
             el('strong', {}, escapeHTML(h.hostname || h.device_hostname || 'Device #' + h.device_id)),
-            el('span', { class: 'muted', style: 'margin-left:8px;font-size:var(--font-size-xs)' }, escapeHTML(h.driver || ''))),
-          el('span', { style: 'font-size:0.7rem;color:var(--text-muted)' }, h.commit_sha ? h.commit_sha.slice(0, 8) : ''));
-        card.appendChild(hdr);
-        const body = el('div', { class: 'search-result-body', hidden: true });
-        if (h.snippet || h.context) {
-          const raw = h.snippet || h.context || '';
+            el('code', { style: 'font-size:0.65rem;color:var(--text-muted)' }, escapeHTML(h.driver || '')),
+            el('span', { style: 'font-size:0.7rem;color:var(--text-muted)' }, h.address || '')),
+          el('div', { style: 'display:flex;gap:8px;align-items:center' },
+            h.commit_sha ? el('code', { style: 'font-size:0.6rem;color:var(--text-muted)' }, h.commit_sha.slice(0, 8)) : null,
+            el('button', { class: 'btn ghost', style: 'font-size:0.65rem;padding:2px 8px' }, '📋 View device')));
+
+        // Snippet body with line numbers
+        const body = el('div', { class: 'search-result-body' });
+        const raw = h.snippet || h.context || '';
+        if (raw) {
+          const lines = raw.split('\n');
           const snippet = el('div', { class: 'search-snippet' });
-          snippet.innerHTML = escapeHTML(raw).replace(
-            new RegExp('(' + q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi'),
-            '<mark>$1</mark>');
+          const lineOffset = h.line_number || 1;
+          for (let i = 0; i < lines.length; i++) {
+            const lineNum = lineOffset + i;
+            const lineEl = el('div', { class: 'search-line' });
+            lineEl.appendChild(el('span', { class: 'search-lineno' }, String(lineNum)));
+            const content = el('span', { class: 'search-linecontent' });
+            // Highlight the search term
+            const escaped = escapeHTML(lines[i]);
+            const re = new RegExp('(' + q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
+            content.innerHTML = escaped.replace(re, '<mark class="search-highlight">$1</mark>');
+            lineEl.appendChild(content);
+            snippet.appendChild(lineEl);
+          }
           body.appendChild(snippet);
         }
+
+        // View device button action
+        const viewBtn = hdr.querySelector('.btn');
+        if (viewBtn) {
+          viewBtn.onclick = (e) => {
+            e.stopPropagation();
+            const devObj = { id: h.device_id, hostname: h.hostname || h.device_hostname, driver: h.driver, address: h.address, port: h.port || 22 };
+            openSlideOver(devObj);
+          };
+        }
+
         hdr.onclick = () => { body.hidden = !body.hidden; };
-        card.appendChild(body);
+        card.append(hdr, body);
         results.appendChild(card);
       }
     } catch (e) { results.innerHTML = '<p class="error">' + escapeHTML(e.message) + '</p>'; }

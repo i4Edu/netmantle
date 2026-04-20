@@ -1069,13 +1069,19 @@ pre.config {
 .zone-card .z-seen { font-size:var(--font-size-xs); color:var(--text-muted); }
 
 /* ===== Config Search ===== */
-.search-result { border:1px solid var(--border-default); border-radius:var(--radius-md); margin-bottom:12px; overflow:hidden; }
-.search-result-header { display:flex; justify-content:space-between; align-items:center; padding:10px 14px; background:var(--surface-sunken); cursor:pointer; }
+.search-result { border:1px solid var(--border-default); border-radius:var(--radius-md); margin-bottom:10px; overflow:hidden; }
+.search-result-header { display:flex; justify-content:space-between; align-items:center; padding:10px 14px; background:var(--surface-sunken); cursor:pointer; font-size:var(--font-size-sm); }
 .search-result-header:hover { background:var(--accent-soft); }
-.search-result-body { padding:0 14px; }
-.search-snippet { font-family:var(--font-config, var(--font-mono)); font-size:0.75rem; padding:8px 0; border-top:1px solid var(--border-default); white-space:pre-wrap; color:var(--text-muted); }
-.search-snippet mark { background:#fef3c7; color:#92400e; border-radius:2px; padding:0 2px; }
-[data-theme='dark'] .search-snippet mark { background:#451a03; color:#fcd34d; }
+.search-result-body { padding:8px 14px; border-top:1px solid var(--border-default); }
+.search-snippet { font-family:var(--font-config, var(--font-mono)); font-size:0.72rem; background:#0d1117; border-radius:var(--radius-sm); padding:8px 0; overflow-x:auto; }
+.search-line { display:flex; line-height:1.6; }
+.search-lineno { display:inline-block; min-width:40px; padding:0 8px; text-align:right; color:#484f58; border-right:1px solid #21262d; user-select:none; flex-shrink:0; }
+.search-linecontent { padding:0 10px; color:#c9d1d9; white-space:pre; }
+.search-highlight { background:#fef3c7; color:#92400e; border-radius:2px; padding:0 2px; font-weight:600; }
+[data-theme='dark'] .search-highlight { background:#451a03; color:#fcd34d; }
+.search-bar-wrap { display:flex; gap:8px; margin-bottom:16px; align-items:center; }
+.search-bar-wrap input[type=search] { flex:1; padding:10px 16px; border:1px solid var(--border-default); border-radius:var(--radius-pill); font-size:var(--font-size-sm); background:var(--surface-card); color:var(--text-default); }
+.search-bar-wrap select { padding:8px 12px; border:1px solid var(--border-default); border-radius:var(--radius-sm); font-size:var(--font-size-xs); background:var(--surface-card); color:var(--text-default); }
 
 /* ===== Users page ===== */
 .role-badge { display:inline-block; padding:2px 8px; border-radius:var(--radius-pill); font-size:0.7rem; font-weight:600; text-transform:uppercase; letter-spacing:.05em; }
