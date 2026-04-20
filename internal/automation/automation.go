@@ -20,6 +20,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/i4Edu/netmantle/internal/audit"
 	"github.com/i4Edu/netmantle/internal/devices"
 	"github.com/i4Edu/netmantle/internal/drivers"
 )
@@ -63,6 +64,11 @@ type Group struct {
 type Service struct {
 	DB      *sql.DB
 	Devices *devices.Repo
+	// PreFlight validates a target is reachable and has credentials before
+	// a live push is attempted.
+	PreFlight func(ctx context.Context, d devices.Device) error
+	// Audit, when set, records high-priority rollback scaffold events.
+	Audit *audit.Service
 	// Executor pushes a rendered config to a device. Returns combined output
 	// or an error. In production it wraps SSH transport + driver.Apply.
 	Executor func(ctx context.Context, d devices.Device, config string) (string, error)
@@ -231,6 +237,17 @@ func (s *Service) Run(ctx context.Context, tenantID, jobID, concurrency int64) (
 			}
 			r.Rendered = b.String()
 			r.Hash = hashOf(r.Rendered)
+			if s.PreFlight != nil {
+				if err := s.PreFlight(ctx, d); err != nil {
+					r.Status = "failed"
+					r.Error = fmt.Sprintf("pre-flight check failed: %v", err)
+					s.recordHighPriorityRollbackScaffold(ctx, tenantID, d, r.Error)
+					mu.Lock()
+					out = append(out, r)
+					mu.Unlock()
+					return
+				}
+			}
 			if s.Executor == nil {
 				r.Status = "skipped"
 			} else {
@@ -239,6 +256,7 @@ func (s *Service) Run(ctx context.Context, tenantID, jobID, concurrency int64) (
 				if err != nil {
 					r.Status = "failed"
 					r.Error = err.Error()
+					s.recordHighPriorityRollbackScaffold(ctx, tenantID, d, err.Error())
 				} else {
 					r.Status = "applied"
 				}
@@ -316,6 +334,14 @@ func nullable(s string) any {
 		return nil
 	}
 	return s
+}
+
+func (s *Service) recordHighPriorityRollbackScaffold(ctx context.Context, tenantID int64, d devices.Device, applyErr string) {
+	if s == nil || s.Audit == nil {
+		return
+	}
+	detail := fmt.Sprintf("priority=high rollback=scaffold status=manual_required error=%s", applyErr)
+	s.Audit.Record(ctx, tenantID, 0, audit.SourceSystem, "automation.apply.rollback_scaffold", fmt.Sprintf("device:%d", d.ID), detail)
 }
 
 // Compile-time check that we use drivers somewhere (executor signature).

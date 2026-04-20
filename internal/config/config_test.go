@@ -29,6 +29,10 @@ func TestLoadFileAndEnvOverride(t *testing.T) {
 	t.Setenv("NETMANTLE_POLLER_GRPC_TLS_CERT_FILE", "/tmp/s.crt")
 	t.Setenv("NETMANTLE_POLLER_GRPC_TLS_KEY_FILE", "/tmp/s.key")
 	t.Setenv("NETMANTLE_POLLER_GRPC_TLS_CLIENT_CA_FILE", "/tmp/ca.crt")
+	t.Setenv("NETMANTLE_DATABASE_MAX_OPEN_CONNS", "200")
+	t.Setenv("NETMANTLE_DATABASE_MAX_IDLE_CONNS", "100")
+	t.Setenv("NETMANTLE_DATABASE_CONN_MAX_LIFETIME", "45m")
+	t.Setenv("NETMANTLE_POLLER_GRPC_TIMEOUT", "20s")
 
 	c, err := Load(p)
 	if err != nil {
@@ -42,6 +46,18 @@ func TestLoadFileAndEnvOverride(t *testing.T) {
 	}
 	if c.Poller.GRPC.Address != ":9443" {
 		t.Errorf("env should override file: %q", c.Poller.GRPC.Address)
+	}
+	if c.Database.MaxOpenConns != 200 {
+		t.Errorf("env should override max_open_conns: %d", c.Database.MaxOpenConns)
+	}
+	if c.Database.MaxIdleConns != 100 {
+		t.Errorf("env should override max_idle_conns: %d", c.Database.MaxIdleConns)
+	}
+	if c.Database.ConnMaxLifetime.String() != "45m0s" {
+		t.Errorf("env should override conn_max_lifetime: %s", c.Database.ConnMaxLifetime)
+	}
+	if c.Poller.GRPC.Timeout.String() != "20s" {
+		t.Errorf("env should override poller.grpc.timeout: %s", c.Poller.GRPC.Timeout)
 	}
 }
 
@@ -66,5 +82,15 @@ func TestValidatePollerGRPCRequiresMTLSFiles(t *testing.T) {
 	c.Poller.GRPC.TLSClientCAFile = "/tmp/ca.crt"
 	if err := c.Validate(); err != nil {
 		t.Fatalf("unexpected validation error: %v", err)
+	}
+}
+
+func TestValidateDatabasePoolBounds(t *testing.T) {
+	c := Default()
+	c.Security.MasterPassphrase = "x"
+	c.Database.MaxOpenConns = 5
+	c.Database.MaxIdleConns = 10
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected error when max_idle_conns exceeds max_open_conns")
 	}
 }

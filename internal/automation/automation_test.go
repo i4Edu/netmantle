@@ -3,10 +3,13 @@ package automation
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/i4Edu/netmantle/internal/audit"
 	"github.com/i4Edu/netmantle/internal/devices"
 	"github.com/i4Edu/netmantle/internal/storage"
 )
@@ -91,5 +94,73 @@ func TestRejectInvalidTemplate(t *testing.T) {
 	if _, err := svc.CreateJob(context.Background(), Job{
 		TenantID: tid, Name: "bad", Template: "{{ .Foo "}); err == nil {
 		t.Fatal("expected template error")
+	}
+}
+
+func TestRunPreFlightGuardBlocksPushAndAudits(t *testing.T) {
+	svc, _, tid := setup(t)
+	svc.Audit = audit.New(svc.DB, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	svc.PreFlight = func(_ context.Context, d devices.Device) error {
+		if d.Hostname == "r2" {
+			return errors.New("dial timeout")
+		}
+		return nil
+	}
+
+	job, err := svc.CreateJob(context.Background(), Job{
+		TenantID: tid, Name: "preflight",
+		Template:  "banner {{.Device.Hostname}}",
+		Variables: map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := svc.Run(context.Background(), tid, job.ID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var blocked bool
+	for _, r := range results {
+		if r.Hostname == "r2" {
+			blocked = strings.Contains(r.Error, "pre-flight check failed")
+		}
+	}
+	if !blocked {
+		t.Fatal("expected r2 to be blocked by pre-flight check")
+	}
+	var n int
+	if err := svc.DB.QueryRow(
+		`SELECT COUNT(*) FROM audit_log WHERE action='automation.apply.rollback_scaffold' AND target='device:2'`,
+	).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n == 0 {
+		t.Fatal("expected high-priority rollback scaffold audit row for pre-flight failure")
+	}
+}
+
+func TestRunApplyFailureWritesHighPriorityAudit(t *testing.T) {
+	svc, _, tid := setup(t)
+	svc.Audit = audit.New(svc.DB, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	job, err := svc.CreateJob(context.Background(), Job{
+		TenantID: tid, Name: "apply-fail",
+		Template:  "banner {{.Device.Hostname}}",
+		Variables: map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Run(context.Background(), tid, job.ID, 2); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := svc.DB.QueryRow(
+		`SELECT COUNT(*) FROM audit_log WHERE action='automation.apply.rollback_scaffold' AND target='device:3'`,
+	).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n == 0 {
+		t.Fatal("expected high-priority rollback scaffold audit row for apply failure")
 	}
 }

@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"crypto/tls"
+	"database/sql"
 	"errors"
 	"net"
 	"net/http"
@@ -10,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/i4Edu/netmantle/internal/poller"
+	"github.com/i4Edu/netmantle/internal/storage"
 	gpb "github.com/openconfig/gnmi/proto/gnmi"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -214,4 +217,109 @@ func TestRESTCONFChaos(t *testing.T) {
 			t.Fatal("expected error from abrupt server closure, got nil")
 		}
 	})
+}
+
+type delayedWireJobs struct {
+	delegate    *poller.JobService
+	claimDelay  time.Duration
+	reportDelay time.Duration
+}
+
+func (d delayedWireJobs) Claim(ctx context.Context, tenantID, pollerID int64, supportedTypes []poller.JobType) (poller.Job, error) {
+	if d.claimDelay > 0 {
+		select {
+		case <-ctx.Done():
+			return poller.Job{}, ctx.Err()
+		case <-time.After(d.claimDelay):
+		}
+	}
+	return d.delegate.Claim(ctx, tenantID, pollerID, supportedTypes)
+}
+
+func (d delayedWireJobs) CompleteClaimedBy(ctx context.Context, tenantID, pollerID, jobID int64, success bool, resultJSON, errMsg string) error {
+	if d.reportDelay > 0 {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(d.reportDelay):
+		}
+	}
+	return d.delegate.CompleteClaimedBy(ctx, tenantID, pollerID, jobID, success, resultJSON, errMsg)
+}
+
+func newWireChaosHarness(t *testing.T) (*sql.DB, *poller.WireService, *poller.Service, *poller.JobService) {
+	t.Helper()
+	db, err := storage.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.Migrate(context.Background(), db); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	pollers := poller.New(db)
+	jobs := poller.NewJobService(db)
+	wire := poller.NewWireService(pollers, jobs)
+	return db, wire, pollers, jobs
+}
+
+func TestWireChaosNetworkFlapDoesNotDoubleClaim(t *testing.T) {
+	db, wire, pollers, jobs := newWireChaosHarness(t)
+	defer db.Close()
+	_, err := db.Exec(`INSERT INTO tenants(id, name, created_at) VALUES(1, 't', ?)`, time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`INSERT INTO devices(id, tenant_id, hostname, address, port, driver, created_at) VALUES(10, 1, 'r1', '127.0.0.1', 22, 'generic_ssh', ?)`, time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, token, err := pollers.Register(context.Background(), 1, "zone-a", "poller-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := wire.Authenticate(context.Background(), 1, p.Name, token); err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	enq, err := jobs.Enqueue(context.Background(), 1, 10, poller.JobTypeBackup, "{}", "chaos-flap", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = wire.Claim(context.Background(), 1, p.ID, []poller.JobType{poller.JobTypeBackup})
+	if err != nil {
+		t.Fatalf("initial claim: %v", err)
+	}
+	if _, _, err := wire.Authenticate(context.Background(), 1, p.Name, token); err != nil {
+		t.Fatalf("re-authenticate after flap: %v", err)
+	}
+	if _, err := wire.Claim(context.Background(), 1, p.ID, []poller.JobType{poller.JobTypeBackup}); err != sql.ErrNoRows {
+		t.Fatalf("expected sql.ErrNoRows after reconnect, got %v", err)
+	}
+	var claimedCount int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM poller_jobs WHERE tenant_id=1 AND id=? AND status='claimed'`, enq.ID).Scan(&claimedCount); err != nil {
+		t.Fatal(err)
+	}
+	if claimedCount != 1 {
+		t.Fatalf("expected exactly one claimed row, got %d", claimedCount)
+	}
+}
+
+func TestWireChaosDatabaseLatencyRespectsContextTimeout(t *testing.T) {
+	db, _, pollers, jobs := newWireChaosHarness(t)
+	defer db.Close()
+	wire := poller.NewWireService(pollers, delayedWireJobs{
+		delegate:    jobs,
+		claimDelay:  200 * time.Millisecond,
+		reportDelay: 200 * time.Millisecond,
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if _, err := wire.Claim(ctx, 1, 1, nil); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline exceeded for delayed claim, got %v", err)
+	}
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel2()
+	if err := wire.ReportResult(ctx2, 1, 1, 1, true, `{"ok":true}`, ""); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline exceeded for delayed report, got %v", err)
+	}
 }

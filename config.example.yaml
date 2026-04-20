@@ -13,6 +13,10 @@ database:
   driver: "sqlite"
   # SQLite DSN. Relative paths are resolved against the working directory.
   dsn: "data/netmantle.db"
+  # DB pool tuning for high-scale environments.
+  max_open_conns: 64
+  max_idle_conns: 32
+  conn_max_lifetime: "30m"
 
 storage:
   # Directory where per-device git repositories are created.
@@ -44,6 +48,8 @@ poller:
   grpc:
     # Optional distributed-poller gRPC listener (leave empty to disable).
     address: ""
+    # Graceful shutdown timeout for in-flight poller RPCs.
+    timeout: "15s"
     # mTLS files required when address is set.
     tls_cert_file: ""
     tls_key_file: ""

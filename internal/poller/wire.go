@@ -9,15 +9,24 @@ import (
 // It maps protocol RPC intents (authenticate/claim/report) to the persisted
 // poller and queue services.
 type WireService struct {
-	Pollers *Service
-	Jobs    *JobService
+	Pollers pollerAuth
+	Jobs    wireJobs
 
 	// LeaseTTL controls refresh_before returned by Authenticate.
 	LeaseTTL time.Duration
 }
 
+type pollerAuth interface {
+	Authenticate(ctx context.Context, tenantID int64, pollerName, token string) (Poller, error)
+}
+
+type wireJobs interface {
+	Claim(ctx context.Context, tenantID, pollerID int64, supportedTypes []JobType) (Job, error)
+	CompleteClaimedBy(ctx context.Context, tenantID, pollerID, jobID int64, success bool, resultJSON, errMsg string) error
+}
+
 // NewWireService constructs a wire adapter with a conservative default lease.
-func NewWireService(pollers *Service, jobs *JobService) *WireService {
+func NewWireService(pollers pollerAuth, jobs wireJobs) *WireService {
 	return &WireService{
 		Pollers:  pollers,
 		Jobs:     jobs,
