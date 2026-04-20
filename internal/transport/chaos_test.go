@@ -192,7 +192,10 @@ func TestRESTCONFChaos(t *testing.T) {
 		}))
 		// Restrict to HTTP/1.1 only — excludes "h2" so the server never
 		// upgrades to HTTP/2, guaranteeing Hijack support.
-		srv.TLS = &tls.Config{NextProtos: []string{"http/1.1"}}
+		srv.TLS = &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			NextProtos: []string{"http/1.1"},
+		}
 		srv.StartTLS()
 		defer srv.Close()
 
