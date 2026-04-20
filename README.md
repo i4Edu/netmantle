@@ -14,11 +14,12 @@ It is delivered as a single Go binary (modular monolith) with SQLite‑first
 persistence, container and Helm packaging, signed releases, and an SBOM with
 every tag.
 
-> **Status:** pre‑1.0. Phases 0–10 of the project plan are landed; remaining
-> hardening items (expanded driver/rule packs, automation `Apply()` execution,
-> HA chaos/scale validation) are tracked explicitly in
-> [`docs/roadmap.md`](docs/roadmap.md). APIs and storage formats are not yet
-> frozen — see [SECURITY.md](SECURITY.md) for the current security posture.
+> **Status:** 1.0‑RC1. Phases 0–10 of the project plan are landed, including
+> native RESTCONF / gNMI transports, gRPC+mTLS distributed‑poller listener,
+> and the full driver pack. Remaining hardening items (automation `Apply()`
+> live execution, HA chaos/scale validation) are tracked in
+> [`docs/roadmap.md`](docs/roadmap.md). The V1 API surface is now frozen —
+> see [SECURITY.md](SECURITY.md) for the current security posture.
 
 ---
 

@@ -79,8 +79,27 @@ scope for follow-up hardening.
 - Build a driver SDK registry for community contributions.
 - Implement multi-tenant HA testing and scaling scenarios.
 
-### First tagged stable MVP
+### 1.0‑RC1 milestone — reached ✅
 
-- Target a stable end-to-end slice: inventory, backup, diff, compliance, and
-  push-jobs.
-- Lock API contracts and storage formats before tagging.
+All Phases 0–10 are landed. The V1 API surface is now frozen:
+
+- **Native transports shipped:** RESTCONF (HTTPS, Basic/Bearer), gNMI
+  (gRPC/TLS with JSON‑IETF), NETCONF‑over‑SSH.
+- **gRPC+mTLS distributed‑poller listener** available in
+  `internal/server/grpc.go`, wired into the main process lifecycle.
+- **Full driver pack hardened:** Cisco IOS/NX‑OS/IOS‑XR, Arista EOS, Juniper
+  Junos, MikroTik RouterOS, Nokia SR OS, Huawei VRP, Fortinet FortiOS, Palo
+  Alto PAN‑OS, BDCOM, V‑SOL, DBC.
+
+Remaining hardening items tracked as explicit follow‑ups below; they do not
+block the 1.0‑RC1 tag.
+
+### Post‑RC1 follow‑ups
+
+- **Automation `Apply()` live execution** — per‑driver push path (Phase 6).
+- **HA chaos/scale validation** — gRPC session chaos tests, 1 000+ concurrent
+  device scale validation (Phase 9 follow‑up).
+- **Additional rule packs** — Junos/Nokia/Huawei compliance baselines, UI
+  picker for pack selection.
+- **Full poller RPC hardening** — complete remote execution and registration
+  over the gRPC wire protocol.
