@@ -316,16 +316,25 @@ func (s *Service) sessionFactoryForDriver(name string) SessionFactory {
 		if s.NetconfSession != nil {
 			return s.NetconfSession
 		}
+		return missingSessionFactory("netconf", name)
 	case "restconf":
 		if s.RestconfSession != nil {
 			return s.RestconfSession
 		}
+		return missingSessionFactory("restconf", name)
 	case "gnmi":
 		if s.GNMISession != nil {
 			return s.GNMISession
 		}
+		return missingSessionFactory("gnmi", name)
 	}
 	return s.NewSession
+}
+
+func missingSessionFactory(transportName, driverName string) SessionFactory {
+	return func(_ context.Context, _ devices.Device, _, _ string) (drivers.Session, func() error, error) {
+		return nil, nil, fmt.Errorf("backup: %s session factory is not configured for driver %q", transportName, driverName)
+	}
 }
 
 // Compile-time assertion: Service is safe for concurrent BackupNow calls

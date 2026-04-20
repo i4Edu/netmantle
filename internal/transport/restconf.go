@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 
@@ -44,22 +43,10 @@ func DialRESTCONF(_ context.Context, cfg RESTCONFConfig) (drivers.Session, func(
 	if cfg.Port == 0 {
 		cfg.Port = 443
 	}
-	host := cfg.Address
-	if _, _, hasScheme := strings.Cut(host, "://"); !hasScheme {
-		host = "https://" + host
-	}
-	u, err := url.Parse(host)
+	baseURL, err := restconfBaseURL(cfg.Address, cfg.Port)
 	if err != nil {
-		return nil, nil, fmt.Errorf("transport/restconf: parse address: %w", err)
+		return nil, nil, err
 	}
-	if u.Port() == "" {
-		u.Host = u.Hostname() + ":" + strconv.Itoa(cfg.Port)
-	}
-	basePath := strings.TrimRight(u.Path, "/")
-	if basePath == "" {
-		basePath = "/restconf"
-	}
-	baseURL := fmt.Sprintf("%s://%s%s", u.Scheme, u.Host, basePath)
 	client := &http.Client{
 		Timeout: cfg.Timeout,
 		Transport: &http.Transport{
@@ -74,6 +61,45 @@ func DialRESTCONF(_ context.Context, cfg RESTCONFConfig) (drivers.Session, func(
 		bearerToken: cfg.BearerToken,
 	}
 	return sess, func() error { return nil }, nil
+}
+
+func restconfBaseURL(address string, defaultPort int) (string, error) {
+	raw := strings.TrimSpace(address)
+	if raw == "" {
+		return "", fmt.Errorf("transport/restconf: empty address")
+	}
+	if strings.Contains(raw, "://") {
+		u, err := url.Parse(raw)
+		if err != nil {
+			return "", fmt.Errorf("transport/restconf: parse address: %w", err)
+		}
+		if strings.TrimSpace(u.Host) == "" {
+			return "", fmt.Errorf("transport/restconf: missing host in address %q", raw)
+		}
+		hostPort, err := normalizeHostPort(u.Host, defaultPort, "transport/restconf")
+		if err != nil {
+			return "", err
+		}
+		path := strings.TrimRight(u.Path, "/")
+		if path == "" {
+			path = "/restconf"
+		}
+		return fmt.Sprintf("%s://%s%s", u.Scheme, hostPort, path), nil
+	}
+	hostPart := raw
+	path := "/restconf"
+	if i := strings.IndexByte(raw, '/'); i >= 0 {
+		hostPart = raw[:i]
+		path = "/" + strings.TrimLeft(raw[i+1:], "/")
+		if strings.TrimSpace(path) == "/" {
+			path = "/restconf"
+		}
+	}
+	hostPort, err := normalizeHostPort(hostPart, defaultPort, "transport/restconf")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("https://%s%s", hostPort, strings.TrimRight(path, "/")), nil
 }
 
 func (s *restconfSession) Run(ctx context.Context, cmd string) (string, error) {

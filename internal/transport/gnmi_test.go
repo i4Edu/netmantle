@@ -62,3 +62,24 @@ func TestParseGNMIPath(t *testing.T) {
 		t.Fatalf("unexpected path: %q", got)
 	}
 }
+
+func TestGNMITargetIPv6Normalization(t *testing.T) {
+	t.Run("ipv6 literal without port", func(t *testing.T) {
+		got, err := gnmiTarget("2001:db8::1", 57400)
+		if err != nil {
+			t.Fatalf("gnmiTarget: %v", err)
+		}
+		if got != "[2001:db8::1]:57400" {
+			t.Fatalf("unexpected target: %q", got)
+		}
+	})
+	t.Run("scheme plus ipv6 literal", func(t *testing.T) {
+		got, err := gnmiTarget("https://[2001:db8::2]", 57400)
+		if err != nil {
+			t.Fatalf("gnmiTarget: %v", err)
+		}
+		if got != "[2001:db8::2]:57400" {
+			t.Fatalf("unexpected target: %q", got)
+		}
+	})
+}

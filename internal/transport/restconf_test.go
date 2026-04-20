@@ -96,3 +96,38 @@ func TestRESTCONFPathParsing(t *testing.T) {
 		}
 	}
 }
+
+func TestRESTCONFBaseURLIPv6Normalization(t *testing.T) {
+	cases := []struct {
+		name    string
+		address string
+		want    string
+	}{
+		{
+			name:    "raw ipv6 literal",
+			address: "2001:db8::1",
+			want:    "https://[2001:db8::1]:443/restconf",
+		},
+		{
+			name:    "scheme bracketed ipv6",
+			address: "https://[2001:db8::2]",
+			want:    "https://[2001:db8::2]:443/restconf",
+		},
+		{
+			name:    "raw ipv6 with path",
+			address: "2001:db8::3/custom",
+			want:    "https://[2001:db8::3]:443/custom",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := restconfBaseURL(tc.address, 443)
+			if err != nil {
+				t.Fatalf("restconfBaseURL: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("want %q, got %q", tc.want, got)
+			}
+		})
+	}
+}

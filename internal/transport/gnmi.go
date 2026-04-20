@@ -5,6 +5,9 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -49,11 +52,9 @@ func DialGNMI(ctx context.Context, cfg GNMIConfig) (drivers.Session, func() erro
 	if cfg.Port == 0 {
 		cfg.Port = 57400
 	}
-	target := cfg.Address
-	target = strings.TrimPrefix(target, "https://")
-	target = strings.TrimPrefix(target, "http://")
-	if !strings.Contains(target, ":") {
-		target = target + ":" + strconv.Itoa(cfg.Port)
+	target, err := gnmiTarget(cfg.Address, cfg.Port)
+	if err != nil {
+		return nil, nil, err
 	}
 	dialCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
@@ -75,6 +76,43 @@ func DialGNMI(ctx context.Context, cfg GNMIConfig) (drivers.Session, func() erro
 		password:    cfg.Password,
 		bearerToken: cfg.BearerToken,
 	}, conn.Close, nil
+}
+
+func gnmiTarget(address string, defaultPort int) (string, error) {
+	raw := strings.TrimSpace(address)
+	if raw == "" {
+		return "", fmt.Errorf("transport/gnmi: empty address")
+	}
+	hostPort := raw
+	if strings.Contains(raw, "://") {
+		u, err := url.Parse(raw)
+		if err != nil {
+			return "", fmt.Errorf("transport/gnmi: parse address: %w", err)
+		}
+		if strings.TrimSpace(u.Host) == "" {
+			return "", fmt.Errorf("transport/gnmi: missing host in address %q", raw)
+		}
+		hostPort = u.Host
+	}
+	return normalizeHostPort(hostPort, defaultPort, "transport/gnmi")
+}
+
+func normalizeHostPort(hostPort string, defaultPort int, label string) (string, error) {
+	hostPort = strings.TrimSpace(hostPort)
+	if hostPort == "" {
+		return "", fmt.Errorf("%s: empty host", label)
+	}
+	if _, _, err := net.SplitHostPort(hostPort); err == nil {
+		return hostPort, nil
+	}
+	trimmed := strings.TrimPrefix(strings.TrimSuffix(hostPort, "]"), "[")
+	if ip, err := netip.ParseAddr(trimmed); err == nil {
+		return net.JoinHostPort(ip.String(), strconv.Itoa(defaultPort)), nil
+	}
+	if strings.Contains(hostPort, ":") {
+		return "", fmt.Errorf("%s: invalid host:port %q", label, hostPort)
+	}
+	return net.JoinHostPort(hostPort, strconv.Itoa(defaultPort)), nil
 }
 
 func (s *gnmiSession) Run(ctx context.Context, cmd string) (string, error) {

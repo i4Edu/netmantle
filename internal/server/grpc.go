@@ -50,7 +50,8 @@ func NewGRPCServer(cfg GRPCConfig, wire *poller.WireService, log *slog.Logger) (
 	}
 	s := grpc.NewServer(
 		grpc.Creds(credentials.NewTLS(tlsCfg)),
-		grpc.UnknownServiceHandler(func(any, grpc.ServerStream) error {
+		grpc.UnknownServiceHandler(func(_ any, stream grpc.ServerStream) error {
+			_ = stream
 			return status.Error(codes.Unimplemented, "poller gRPC wire service registration is pending")
 		}),
 	)

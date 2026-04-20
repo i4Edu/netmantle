@@ -137,7 +137,9 @@ main h3 {
 
 /* ---------- card system ---------- */
 .card {
+  background: var(--surface-card);
   background: color-mix(in srgb, var(--surface-card) 78%, transparent);
+  border: 1px solid var(--border-default);
   border: 1px solid color-mix(in srgb, var(--border-default) 70%, transparent);
   border-radius: var(--radius-md);
   padding: var(--space-4);
@@ -413,7 +415,9 @@ pre.config {
   margin-bottom: var(--space-4);
 }
 .dash-stat {
+  background: var(--surface-card);
   background: color-mix(in srgb, var(--surface-card) 72%, transparent);
+  border: 1px solid var(--border-default);
   border: 1px solid color-mix(in srgb, var(--border-default) 65%, transparent);
   border-radius: var(--radius-md);
   padding: var(--space-4);
@@ -594,8 +598,10 @@ pre.config {
 /* ---------- topology canvas ---------- */
 .topo-wrap {
   position: relative;
+  border: 1px solid var(--border-default);
   border: 1px solid color-mix(in srgb, var(--border-default) 60%, transparent);
   border-radius: var(--radius-md);
+  background: var(--surface-card);
   background: color-mix(in srgb, var(--surface-card) 70%, transparent);
   overflow: hidden;
   backdrop-filter: blur(12px);
@@ -606,7 +612,9 @@ pre.config {
 .topo-wrap .legend {
   position: absolute;
   top: var(--space-2); left: var(--space-2);
+  background: var(--surface-card);
   background: color-mix(in srgb, var(--surface-card) 65%, transparent);
+  border: 1px solid var(--border-default);
   border: 1px solid color-mix(in srgb, var(--border-default) 55%, transparent);
   border-radius: var(--radius-sm);
   padding: var(--space-1) var(--space-3);
@@ -633,7 +641,9 @@ pre.config {
   position: absolute;
   top: 0; right: 0; bottom: 0;
   width: 280px;
+  background: var(--surface-card);
   background: color-mix(in srgb, var(--surface-card) 72%, transparent);
+  border-left: 1px solid var(--border-default);
   border-left: 1px solid color-mix(in srgb, var(--border-default) 60%, transparent);
   padding: var(--space-3);
   overflow-y: auto;
