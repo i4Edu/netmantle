@@ -15,7 +15,7 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// blockingGNMIGetter blocks until the context is cancelled, then returns ctx.Err().
+// blockingGNMIGetter blocks until the context is canceled, then returns ctx.Err().
 type blockingGNMIGetter struct{}
 
 func (b *blockingGNMIGetter) Get(ctx context.Context, _ *gpb.GetRequest, _ ...grpc.CallOption) (*gpb.GetResponse, error) {
@@ -109,7 +109,7 @@ func TestGNMIChaos(t *testing.T) {
 			ctx, cancel := tc.setupCtx()
 			defer cancel()
 
-			sess := &gnmiSession{getter: tc.getter, username: "u", password: "p"}
+			sess := &gnmiSession{getter: tc.getter, username: "testuser", password: "testpass"}
 			got, err := sess.Run(ctx, "get-config:running")
 
 			if tc.wantErr {

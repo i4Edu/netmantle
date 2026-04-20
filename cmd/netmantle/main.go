@@ -286,7 +286,11 @@ func runServe(argv []string) error {
 			if serr != nil {
 				return serr
 			}
-			defer closer() //nolint:errcheck
+			defer func() {
+				if cerr := closer(); cerr != nil {
+					log.Debug("automation: session close", "err", cerr, "device", d.Hostname)
+				}
+			}()
 			out, rerr := sess.Run(ctx, config)
 			if rerr != nil {
 				return rerr
