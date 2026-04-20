@@ -356,6 +356,7 @@ func (s *Service) recordHighPriorityRollbackScaffold(ctx context.Context, tenant
 func sanitizeAuditError(msg string) string {
 	msg = strings.ReplaceAll(msg, "\n", " ")
 	msg = strings.ReplaceAll(msg, "\r", " ")
+	// Keep details compact for audit table readability in UI/API responses.
 	const maxLen = 160
 	if len(msg) > maxLen {
 		msg = msg[:maxLen] + "..."
