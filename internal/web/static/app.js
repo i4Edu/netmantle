@@ -519,7 +519,8 @@ views.inventory = async (root) => {
     // Populate selects
     const driverSel = $('select[name=driver]', modal);
     api('GET', '/drivers').then(drivers => {
-      driverSel.innerHTML = (drivers || []).map(d => `<option value="${escHTML(d.id)}">${escHTML(d.name || d.id)}</option>`).join('');
+      const list = (drivers || []).map(d => typeof d === 'string' ? d : (d.id || d.name || d));
+      driverSel.innerHTML = list.map(name => `<option value="${escHTML(name)}">${escHTML(name)}</option>`).join('');
     }).catch(() => { driverSel.innerHTML = '<option>generic_ssh</option>'; });
 
     const credSel = $('select[name=credential_id]', modal);
