@@ -27,8 +27,8 @@ import (
 
 // TelnetConfig holds connection parameters for a Telnet session.
 type TelnetConfig struct {
-	Address  string        // host or host:port
-	Port     int           // used when Address has no port; default 23
+	Address  string // host or host:port
+	Port     int    // used when Address has no port; default 23
 	Username string
 	Password string
 	Timeout  time.Duration // default 30 s
@@ -78,13 +78,13 @@ type telnetSession struct {
 
 // Telnet IAC bytes (RFC 854).
 const (
-	iacByte  = 0xFF
-	iacDont  = 0xFE
-	iacDo    = 0xFD
-	iacWont  = 0xFC
-	iacWill  = 0xFB
-	iacSB    = 0xFA // subnegotiation begin
-	iacSE    = 0xF0 // subnegotiation end
+	iacByte = 0xFF
+	iacDont = 0xFE
+	iacDo   = 0xFD
+	iacWont = 0xFC
+	iacWill = 0xFB
+	iacSB   = 0xFA // subnegotiation begin
+	iacSE   = 0xF0 // subnegotiation end
 )
 
 // login reads the initial banner, responds to IAC option negotiations,
@@ -277,7 +277,8 @@ func (s *telnetSession) readUntilPrompt(ctx context.Context) (string, error) {
 // DONT responses so the server stops offering options we don't want.
 //
 // IAC sequences: IAC WILL/WONT/DO/DONT <option> (3 bytes each)
-//                IAC SB ... IAC SE (subnegotiation, variable length)
+//
+//	IAC SB ... IAC SE (subnegotiation, variable length)
 //
 // We reply to WILL with DONT, and to DO with WONT, coercing the server into
 // NVT (Network Virtual Terminal) mode which is a plain 8-bit byte stream.

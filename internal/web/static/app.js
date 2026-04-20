@@ -696,6 +696,11 @@ async function renderSlideoverTab(dev, tab) {
         ));
       }
       body.appendChild(tbl);
+
+      // Export toolbar
+      body.appendChild(exportToolbar(async () => {
+        try { return await api('GET', `/devices/${dev.id}/config`); } catch (_) { return ''; }
+      }));
     } catch (e) { body.innerHTML = '<p class="error">' + escapeHTML(e.message) + '</p>'; }
 
   } else if (tab === 'diffs') {
@@ -1576,21 +1581,111 @@ views.approvals = async (root) => {
   root.appendChild(card);
 };
 
-// ---------- Automation (Mass Config Push wizard) ----------
+// ---------- Automation (Mass Config Push wizard — v2) ----------
+// 5 steps: Create/Select Job → Map Variables → Preflight → Preview → Execute
+
+// --- Config Editor component ---
+function configEditor(initialValue, onChange) {
+  const wrap = el('div', { class: 'config-editor-wrap' });
+  const lineNums = el('div', { class: 'line-numbers' });
+  const ta = el('textarea', { spellcheck: 'false', autocomplete: 'off', autocorrect: 'off' });
+  ta.value = initialValue || '';
+  wrap.append(lineNums, ta);
+
+  function updateLineNumbers() {
+    const count = (ta.value.match(/\n/g) || []).length + 1;
+    lineNums.innerHTML = '';
+    for (let i = 1; i <= count; i++) lineNums.appendChild(el('span', {}, String(i)));
+  }
+
+  ta.addEventListener('input', () => { updateLineNumbers(); onChange?.(ta.value); });
+  ta.addEventListener('scroll', () => { lineNums.scrollTop = ta.scrollTop; });
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Tab') { e.preventDefault(); const s = ta.selectionStart; ta.value = ta.value.substring(0, s) + '  ' + ta.value.substring(ta.selectionEnd); ta.selectionStart = ta.selectionEnd = s + 2; }
+  });
+  updateLineNumbers();
+  return { wrap, textarea: ta, getValue: () => ta.value };
+}
+
+// --- Variable Mapper component ---
+function detectVariables(template) {
+  const vars = new Set();
+  const re = /\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}/g;
+  let m;
+  while ((m = re.exec(template)) !== null) vars.add(m[1]);
+  return [...vars];
+}
+
+function variableMapper(template, devices) {
+  const vars = detectVariables(template);
+  if (!vars.length) return { el: el('p', { class: 'muted', style: 'font-size:var(--font-size-sm)' }, 'No {{variables}} detected in template.'), getMapping: () => ({}) };
+
+  const deviceFields = ['hostname', 'address', 'port', 'driver', 'id'];
+  const container = el('div', { class: 'var-mapper' });
+  container.appendChild(el('div', { class: 'var-mapper-header' },
+    el('span', {}, `${vars.length} variable${vars.length > 1 ? 's' : ''} detected`)));
+
+  const mapping = {};
+  for (const v of vars) {
+    const source = el('select', {},
+      el('option', { value: 'manual' }, 'Manual value'),
+      ...deviceFields.map(f => el('option', { value: 'field:' + f }, 'Device: ' + f)));
+    const manualInp = el('input', { type: 'text', placeholder: 'Enter value…' });
+    source.addEventListener('change', () => {
+      manualInp.hidden = source.value !== 'manual';
+      mapping[v] = { source: source.value, manual: manualInp.value };
+    });
+    manualInp.addEventListener('input', () => {
+      mapping[v] = { source: 'manual', manual: manualInp.value };
+    });
+    mapping[v] = { source: 'manual', manual: '' };
+    container.appendChild(el('div', { class: 'var-mapper-row' },
+      el('span', { class: 'var-name' }, `{{${v}}}`),
+      manualInp, source));
+  }
+
+  return { el: container, getMapping: () => mapping };
+}
+
+// --- Export Utility toolbar ---
+function exportToolbar(getText) {
+  const bar = el('div', { class: 'export-toolbar' });
+  const copyBtn = el('button', { type: 'button' }, '📋 Copy');
+  copyBtn.onclick = () => {
+    navigator.clipboard.writeText(getText()).then(() => { copyBtn.textContent = '✓ Copied'; setTimeout(() => { copyBtn.textContent = '📋 Copy'; }, 1500); });
+  };
+  const dlBtn = el('button', { type: 'button' }, '💾 Download .cfg');
+  dlBtn.onclick = () => {
+    const blob = new Blob([getText()], { type: 'text/plain' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = 'config.cfg'; a.click(); URL.revokeObjectURL(a.href);
+  };
+  bar.append(copyBtn, dlBtn);
+  return bar;
+}
+
 views.automation = (root) => {
-  root.appendChild(el('h2', {}, 'Mass Config Push'));
+  root.appendChild(el('div', { class: 'page-header' },
+    el('div', { class: 'page-header-left' },
+      el('div', { class: 'page-header-breadcrumb' }, 'Automation & Intelligence'),
+      el('div', { class: 'page-header-title' }, 'Mass Config Push')),
+    el('div', { class: 'page-header-actions' },
+      el('button', { class: 'btn ghost', id: 'push-export-btn' }, '📥 Export Configs'),
+      el('button', { class: 'btn ghost', id: 'push-schedule-btn' }, '⏰ Schedules'))));
 
-  let step = 0;
-  let selectedJob = null;
-  let previewResults = [];
+  let step = 0, selectedJob = null, previewResults = [], allDevices = [];
+  let currentTemplate = '', varMapperState = null;
 
-  const stepsEl = el('div', { class: 'wizard-steps' },
-    el('div', { class: 'wizard-step active', 'data-step': '0' }, '1. Select Job'),
-    el('div', { class: 'wizard-step', 'data-step': '1' }, '2. Preview'),
-    el('div', { class: 'wizard-step', 'data-step': '2' }, '3. Execute'),
-  );
+  const STEPS = ['Select Job', 'Variables', 'Pre-flight', 'Preview', 'Execute'];
+  const stepsEl = el('div', { class: 'wizard-steps' });
+  STEPS.forEach((s, i) => stepsEl.appendChild(
+    el('div', { class: 'wizard-step' + (i === 0 ? ' active' : ''), 'data-step': String(i) }, `${i + 1}. ${s}`)));
   const stepContent = el('div', { class: 'card', style: 'padding:var(--space-5)' });
   root.append(stepsEl, stepContent);
+
+  // Wire top-bar buttons
+  root.querySelector('#push-export-btn').onclick = () => openExportModal();
+  root.querySelector('#push-schedule-btn').onclick = () => { location.hash = '#/settings'; };
 
   function setStep(n) {
     step = n;
@@ -1603,157 +1698,286 @@ views.automation = (root) => {
 
   function renderStep() {
     stepContent.innerHTML = '';
-    if (step === 0) renderJobSelect();
-    else if (step === 1) renderPreview();
-    else renderExecute();
+    [renderJobSelect, renderVariables, renderPreflight, renderPreview, renderExecute][step]();
   }
 
+  // STEP 0: Select or Create Job
   async function renderJobSelect() {
-    stepContent.innerHTML = '<p style="color:var(--text-muted)">Loading jobs…</p>';
+    stepContent.innerHTML = '<p class="muted">Loading…</p>';
     let jobs = [];
-    try { jobs = await api('GET', '/automation/jobs'); } catch (_) { jobs = []; }
+    try { jobs = await api('GET', '/push/jobs'); } catch (_) {}
+    try { allDevices = await api('GET', '/devices'); } catch (_) { allDevices = []; }
     stepContent.innerHTML = '';
-
-    if (!jobs.length) {
-      stepContent.appendChild(el('p', { class: 'muted' }, 'No push jobs defined. Create one below or via the API.'));
-    }
 
     const jobList = el('div', { style: 'display:grid;gap:10px;margin-bottom:16px' });
     for (const j of jobs) {
       const card = el('div', { class: 'card', style: 'cursor:pointer;border:2px solid transparent;padding:12px 16px' },
         el('div', { style: 'display:flex;justify-content:space-between;align-items:center' },
           el('strong', {}, escapeHTML(j.name)),
-          j.safe_mode ? el('span', { class: 'badge badge-ok' }, '🛡 Safe Mode') : el('span', {})),
+          el('div', { style: 'display:flex;gap:6px' },
+            j.safe_mode ? el('span', { class: 'badge ok' }, '🛡 Safe') : null,
+            j.verify_command ? el('span', { class: 'badge info' }, '✓ Verify') : null)),
         el('p', { class: 'muted', style: 'margin:4px 0 0;font-size:var(--font-size-xs)' },
-          j.target_group_id ? `Group #${j.target_group_id}` : 'All devices'),
-      );
+          j.target_group_id ? `Group #${j.target_group_id}` : 'All devices'));
       card.onclick = () => {
         $$('.card', jobList).forEach(c => c.style.borderColor = 'transparent');
         card.style.borderColor = 'var(--accent)';
         selectedJob = j;
+        currentTemplate = j.template || '';
       };
       jobList.appendChild(card);
     }
+    if (!jobs.length) jobList.appendChild(el('p', { class: 'muted' }, 'No push jobs yet. Create one below.'));
 
-    const nextBtn = el('button', { class: 'btn' }, 'Preview →');
-    nextBtn.onclick = async () => {
-      if (!selectedJob) { alert('Select a job first.'); return; }
-      setStep(1);
-    };
+    const nextBtn = el('button', { class: 'btn' }, 'Next: Variables →');
+    nextBtn.onclick = () => { if (!selectedJob) { alert('Select a job first.'); return; } setStep(1); };
     stepContent.append(jobList, nextBtn);
 
-    const createDetails = el('details', { style: 'margin-top:20px' },
+    // Create new job form with config editor
+    const createDet = el('details', { style: 'margin-top:20px' },
       el('summary', { style: 'cursor:pointer;font-weight:600;font-size:var(--font-size-sm)' }, '+ Create new push job'));
-    const createForm = el('form', { style: 'margin-top:12px;display:grid;gap:10px' },
-      el('label', {}, 'Name ', el('input', { name: 'name', required: true, style: 'width:100%' })),
-      el('label', {}, 'Template (Go text/template) ',
-        el('textarea', { name: 'template', rows: '5', required: true, style: 'width:100%;font-family:var(--font-mono);font-size:0.8rem' })),
-      el('label', { style: 'display:flex;gap:8px;align-items:center' },
-        el('input', { type: 'checkbox', name: 'safe_mode' }),
-        ' Enable Safe Mode (auto-rollback if device unreachable)'),
-      el('button', { type: 'submit', class: 'btn' }, 'Create Job'),
-    );
-    createForm.onsubmit = async (e) => {
-      e.preventDefault();
-      const fd = new FormData(createForm);
+    const nameInp = el('input', { name: 'name', required: true, placeholder: 'Job name', style: 'width:100%;padding:7px 10px;border:1px solid var(--border-default);border-radius:var(--radius-sm);font-size:var(--font-size-sm);background:var(--surface-card);color:var(--text-default);margin-bottom:8px' });
+    const editor = configEditor('/ip address add address={{customer_ip}} interface=ether1\n# Disable telnet\n/ip service set telnet disabled=yes', (v) => { currentTemplate = v; });
+
+    const safeCheck = el('label', { style: 'display:flex;gap:8px;align-items:center;font-size:var(--font-size-sm);margin-top:8px' },
+      el('input', { type: 'checkbox', name: 'safe_mode' }), ' Enable Safe Mode');
+    const verifyInp = el('input', { type: 'text', placeholder: 'e.g. ping 8.8.8.8 count=1', style: 'width:100%;padding:7px 10px;border:1px solid var(--border-default);border-radius:var(--radius-sm);font-size:var(--font-size-sm);background:var(--surface-card);color:var(--text-default)' });
+    const rollbackEditor = configEditor('# Rollback commands here\n', null);
+
+    const createBtn = el('button', { class: 'btn', style: 'margin-top:12px' }, 'Create Job');
+    createBtn.onclick = async () => {
+      const name = nameInp.value.trim();
+      if (!name) { alert('Name required'); return; }
       try {
-        await api('POST', '/automation/jobs', {
-          name: fd.get('name'),
-          template: fd.get('template'),
-          safe_mode: fd.get('safe_mode') === 'on',
+        const job = await api('POST', '/push/jobs', {
+          name,
+          template: editor.getValue(),
+          safe_mode: safeCheck.querySelector('input').checked,
+          verify_command: verifyInp.value.trim(),
+          rollback_template: rollbackEditor.getValue(),
         });
-        createDetails.open = false;
+        selectedJob = job;
+        currentTemplate = editor.getValue();
+        createDet.open = false;
         renderStep();
       } catch (err) { alert('Create failed: ' + err.message); }
     };
-    createDetails.appendChild(createForm);
-    stepContent.appendChild(createDetails);
+
+    createDet.append(
+      el('div', { style: 'margin-top:12px;display:grid;gap:8px' },
+        el('label', { style: 'font-size:var(--font-size-sm);font-weight:600' }, 'Job Name'), nameInp,
+        el('label', { style: 'font-size:var(--font-size-sm);font-weight:600;margin-top:4px' }, 'Template (Vendor CLI)'),
+        el('p', { class: 'muted', style: 'font-size:var(--font-size-xs);margin:0 0 4px' }, 'Use {{variable_name}} for dynamic injection. Supports MikroTik, Cisco, Huawei CLI.'),
+        editor.wrap,
+        safeCheck,
+        el('label', { style: 'font-size:var(--font-size-sm);font-weight:600;margin-top:8px' }, 'Verify Command (optional)'), verifyInp,
+        el('span', { class: 'help' }, 'Runs after push to verify connectivity. Rollback triggers if this fails.'),
+        el('label', { style: 'font-size:var(--font-size-sm);font-weight:600;margin-top:8px' }, 'Rollback Template (optional)'),
+        rollbackEditor.wrap,
+        createBtn));
+    stepContent.appendChild(createDet);
   }
 
-  async function renderPreview() {
-    stepContent.innerHTML = '<p style="color:var(--text-muted)">Generating preview…</p>';
-    try {
-      previewResults = await api('POST', `/automation/jobs/${selectedJob.id}/preview`);
-    } catch (err) {
-      stepContent.innerHTML = `<p style="color:var(--status-bad)">Preview failed: ${escapeHTML(err.message)}</p>`;
-      return;
-    }
+  // STEP 1: Variable Mapper
+  function renderVariables() {
     stepContent.innerHTML = '';
-    stepContent.appendChild(el('h3', {}, `Preview — ${escapeHTML(selectedJob.name)}`));
-    stepContent.appendChild(el('p', { class: 'muted', style: 'font-size:var(--font-size-sm)' },
-      `${previewResults.length} device(s) targeted. Review rendered configs before pushing.`));
-
-    const groups = groupByHash(previewResults);
-    for (const [, grp] of Object.entries(groups)) {
-      const section = el('details', { style: 'margin-bottom:8px;border:1px solid var(--border-default);border-radius:var(--radius-md);overflow:hidden' },
-        el('summary', { style: 'padding:10px 14px;cursor:pointer;font-size:var(--font-size-sm);background:var(--surface-sunken)' },
-          el('strong', {}, grp.devices.map(escapeHTML).join(', ')),
-          el('span', { class: 'muted', style: 'margin-left:8px;font-size:0.75rem' }, `${grp.devices.length} device(s) — identical config`)),
-        el('pre', { class: 'config-view', style: 'border-radius:0;border:none' }, escapeHTML(grp.rendered || '')));
-      stepContent.appendChild(section);
-    }
+    stepContent.appendChild(el('h3', {}, `Variables — ${escapeHTML(selectedJob.name)}`));
+    const tpl = currentTemplate || selectedJob.template || '';
+    varMapperState = variableMapper(tpl, allDevices);
+    stepContent.appendChild(varMapperState.el);
 
     const nav = el('div', { style: 'display:flex;gap:8px;margin-top:16px' },
       el('button', { class: 'btn ghost' }, '← Back'),
-      el('button', { class: 'btn' }, '⚡ Execute Push'));
+      el('button', { class: 'btn' }, 'Next: Pre-flight →'));
     nav.children[0].onclick = () => setStep(0);
     nav.children[1].onclick = () => setStep(2);
     stepContent.appendChild(nav);
   }
 
+  // STEP 2: Pre-flight connectivity check
+  async function renderPreflight() {
+    stepContent.innerHTML = '';
+    stepContent.appendChild(el('h3', {}, 'Pre-flight Connectivity Check'));
+    stepContent.appendChild(el('p', { class: 'muted', style: 'font-size:var(--font-size-sm)' }, 'Verifying SSH/Telnet connectivity to target devices…'));
+
+    const grid = el('div', { class: 'preflight-grid' });
+    const summary = el('div', { style: 'margin-top:12px;font-size:var(--font-size-sm)' });
+    stepContent.append(grid, summary);
+
+    let results = [];
+    try {
+      results = (await api('POST', `/push/jobs/${selectedJob.id}/preflight`)).results || [];
+    } catch (e) {
+      // Fallback: show all devices as unchecked
+      for (const d of allDevices) results.push({ device_id: d.id, hostname: d.hostname, reachable: null, error: 'preflight not available' });
+    }
+
+    grid.innerHTML = '';
+    let reachable = 0, unreachable = 0;
+    for (const r of results) {
+      if (r.reachable) reachable++; else unreachable++;
+      grid.appendChild(el('div', { class: 'preflight-row' },
+        el('span', { class: 'pf-dot ' + (r.reachable ? 'ok' : 'bad') }),
+        el('span', {}, escapeHTML(r.hostname || 'Device #' + r.device_id)),
+        el('span', { class: 'pf-latency' }, r.latency_ms ? r.latency_ms + 'ms' : '—'),
+        el('span', { class: 'badge ' + (r.reachable ? 'ok' : 'bad') }, r.reachable ? 'OK' : 'Fail')));
+    }
+    summary.innerHTML = '';
+    summary.append(
+      el('span', { class: 'badge ok', style: 'margin-right:6px' }, `${reachable} reachable`),
+      unreachable ? el('span', { class: 'badge bad' }, `${unreachable} unreachable`) : null);
+
+    const nav = el('div', { style: 'display:flex;gap:8px;margin-top:16px' },
+      el('button', { class: 'btn ghost' }, '← Back'),
+      el('button', { class: 'btn' }, 'Next: Preview →'));
+    nav.children[0].onclick = () => setStep(1);
+    nav.children[1].onclick = () => setStep(3);
+    stepContent.appendChild(nav);
+  }
+
+  // STEP 3: Preview rendered configs
+  async function renderPreview() {
+    stepContent.innerHTML = '<p class="muted">Generating preview…</p>';
+    try {
+      const res = await api('POST', `/push/jobs/${selectedJob.id}/preview`);
+      previewResults = res.results || res || [];
+    } catch (err) {
+      stepContent.innerHTML = `<p class="error">Preview failed: ${escapeHTML(err.message)}</p>`;
+      stepContent.appendChild(el('button', { class: 'btn ghost', onclick: () => setStep(2) }, '← Back'));
+      return;
+    }
+    stepContent.innerHTML = '';
+    stepContent.appendChild(el('h3', {}, `Preview — ${escapeHTML(selectedJob.name)}`));
+    stepContent.appendChild(el('p', { class: 'muted', style: 'font-size:var(--font-size-sm)' },
+      `${previewResults.length} device(s) targeted.`));
+
+    for (const r of previewResults.slice(0, 30)) {
+      const det = el('details', { style: 'margin-bottom:6px;border:1px solid var(--border-default);border-radius:var(--radius-md);overflow:hidden' },
+        el('summary', { style: 'padding:8px 14px;cursor:pointer;font-size:var(--font-size-sm);background:var(--surface-sunken)' },
+          el('strong', {}, escapeHTML(r.hostname || 'unknown'))),
+        el('pre', { class: 'config-view', style: 'border-radius:0;border:none;margin:0' }, escapeHTML(r.rendered || '')));
+      stepContent.appendChild(det);
+    }
+
+    const nav = el('div', { style: 'display:flex;gap:8px;margin-top:16px' },
+      el('button', { class: 'btn ghost' }, '← Back'),
+      el('button', { class: 'btn' }, '⚡ Execute Push'));
+    nav.children[0].onclick = () => setStep(2);
+    nav.children[1].onclick = () => setStep(4);
+    stepContent.appendChild(nav);
+  }
+
+  // STEP 4: Execute with terminal queue
   async function renderExecute() {
     stepContent.innerHTML = '';
     stepContent.appendChild(el('h3', {}, `Executing — ${escapeHTML(selectedJob.name)}`));
+    if (selectedJob.safe_mode) stepContent.appendChild(el('p', { style: 'font-size:var(--font-size-xs);color:var(--status-info)' }, '🛡 Safe Mode — devices will be rolled back if unreachable after push'));
 
-    const total = previewResults.length;
+    const total = previewResults.length || allDevices.length || 1;
     let done = 0, failures = 0;
 
+    // Global progress
     const progressFill = el('div', { class: 'progress-bar-fill', style: 'width:0%' });
-    const progressPct = el('span', { style: 'font-weight:600' }, '0%');
-    const progressWrap = el('div', { class: 'device-progress' },
-      el('div', { class: 'progress-bar-wrap' }, progressFill),
-      progressPct);
-    stepContent.appendChild(progressWrap);
+    const progressPct = el('span', { style: 'font-weight:600;font-size:var(--font-size-sm)' }, '0%');
+    stepContent.appendChild(el('div', { class: 'device-progress', style: 'margin-bottom:12px' },
+      el('div', { class: 'progress-bar-wrap' }, progressFill), progressPct));
 
-    const console_ = el('div', { class: 'push-console' });
-    stepContent.appendChild(console_);
+    // Terminal queue: device list + console
+    const tq = el('div', { class: 'terminal-queue' });
+    const deviceList = el('div', { class: 'tq-device-list' });
+    const consoleEl = el('div', { class: 'tq-console' });
+    tq.append(deviceList, consoleEl);
+    stepContent.appendChild(tq);
 
-    function log(msg, cls = '') {
-      const line = el('div', { class: cls }, msg);
-      console_.appendChild(line);
-      console_.scrollTop = console_.scrollHeight;
+    // Populate device list
+    const deviceItems = {};
+    const deviceLogs = {};
+    for (const r of previewResults) {
+      const key = r.hostname || 'device-' + (r.device_id || Math.random());
+      deviceLogs[key] = [];
+      const item = el('div', { class: 'tq-device-item', 'data-key': key },
+        el('span', { class: 'tq-status pending' }),
+        el('span', {}, escapeHTML(r.hostname || 'Unknown')));
+      item.onclick = () => showDeviceLogs(key);
+      deviceItems[key] = item;
+      deviceList.appendChild(item);
     }
 
-    log(`[info] Starting push job "${selectedJob.name}" · ${total} device(s)`, 'info');
-    if (selectedJob.safe_mode) log('[info] Safe Mode enabled — will roll back if device unreachable', 'info');
+    let activeKey = null;
+    function showDeviceLogs(key) {
+      activeKey = key;
+      $$('.tq-device-item', deviceList).forEach(i => i.classList.toggle('active', i.dataset.key === key));
+      consoleEl.innerHTML = '';
+      for (const line of (deviceLogs[key] || [])) {
+        consoleEl.appendChild(el('div', { class: 'tq-line ' + (line.cls || '') }, line.text));
+      }
+      consoleEl.scrollTop = consoleEl.scrollHeight;
+    }
+
+    function log(key, text, cls) {
+      if (!deviceLogs[key]) deviceLogs[key] = [];
+      deviceLogs[key].push({ text, cls });
+      if (key === activeKey) {
+        consoleEl.appendChild(el('div', { class: 'tq-line ' + (cls || '') }, text));
+        consoleEl.scrollTop = consoleEl.scrollHeight;
+      }
+    }
+
+    function setDeviceStatus(key, status) {
+      const item = deviceItems[key];
+      if (!item) return;
+      const dot = item.querySelector('.tq-status');
+      if (dot) { dot.className = 'tq-status ' + status; }
+    }
+
+    // Global console log
+    function globalLog(text, cls) {
+      consoleEl.appendChild(el('div', { class: 'tq-line ' + (cls || '') }, text));
+      consoleEl.scrollTop = consoleEl.scrollHeight;
+    }
+
+    globalLog(`[info] Starting push job "${selectedJob.name}" · ${total} device(s)`, 'info');
+    if (selectedJob.safe_mode) globalLog('[info] Safe Mode enabled', 'info');
+    if (selectedJob.verify_command) globalLog(`[info] Verify command: ${selectedJob.verify_command}`, 'info');
 
     try {
-      const results = await api('POST', `/automation/jobs/${selectedJob.id}/run`, { concurrency: 4 });
+      const res = await api('POST', `/push/jobs/${selectedJob.id}/run`, { concurrency: 4 });
+      const results = res.results || res || [];
       for (const r of results) {
         done++;
         const pct = Math.round((done / total) * 100);
         progressFill.style.width = pct + '%';
         progressPct.textContent = pct + '%';
+        const key = r.hostname || 'device-' + r.device_id;
+
         if (r.status === 'applied') {
-          log(`[ok]   ${escapeHTML(r.hostname)} — applied`, 'ok');
+          setDeviceStatus(key, 'ok');
+          log(key, `[ok] Config applied successfully`, 'ok');
+          globalLog(`[ok]   ${escapeHTML(r.hostname)} — applied`, 'ok');
         } else if (r.status === 'rolled_back') {
           failures++;
-          log(`[warn] ${escapeHTML(r.hostname)} — ROLLED BACK (${escapeHTML(r.error || 'unreachable after push')})`, 'warn');
+          setDeviceStatus(key, 'fail');
+          log(key, `[warn] ROLLED BACK: ${r.error || 'unreachable'}`, 'warn');
+          globalLog(`[warn] ${escapeHTML(r.hostname)} — ROLLED BACK`, 'warn');
         } else if (r.status === 'failed') {
           failures++;
-          log(`[fail] ${escapeHTML(r.hostname)} — ${escapeHTML(r.error || 'unknown error')}`, 'fail');
+          setDeviceStatus(key, 'fail');
+          log(key, `[fail] ${r.error || 'unknown error'}`, 'err');
+          globalLog(`[fail] ${escapeHTML(r.hostname)} — ${escapeHTML(r.error || 'error')}`, 'err');
         } else {
-          log(`[----] ${escapeHTML(r.hostname)} — ${r.status}`, '');
+          log(key, `[----] ${r.status}`, '');
+          globalLog(`[----] ${escapeHTML(r.hostname)} — ${r.status}`, '');
         }
       }
+
       if (failures > 0) {
         progressFill.classList.add('has-failures');
-        log(`\n[done] Completed with ${failures} failure(s)/${total} device(s)`, 'warn');
+        globalLog(`\n[done] Completed with ${failures} failure(s) / ${total}`, 'warn');
       } else {
-        log(`\n[done] All ${total} device(s) pushed successfully`, 'ok');
+        globalLog(`\n[done] All ${total} device(s) pushed successfully`, 'ok');
       }
     } catch (err) {
-      log(`[fail] Execution error: ${escapeHTML(err.message)}`, 'fail');
+      globalLog(`[fail] Execution error: ${escapeHTML(err.message)}`, 'err');
     }
 
     const doneBtn = el('button', { class: 'btn', style: 'margin-top:12px' }, '← Back to jobs');
@@ -1761,18 +1985,119 @@ views.automation = (root) => {
     stepContent.appendChild(doneBtn);
   }
 
-  function groupByHash(results) {
-    const out = {};
-    for (const r of results) {
-      const h = r.hash || r.hostname;
-      if (!out[h]) out[h] = { rendered: r.rendered, devices: [] };
-      out[h].devices.push(r.hostname);
-    }
-    return out;
-  }
-
   renderStep();
 };
+
+// ---------- Export Modal (bulk config download) ----------
+async function openExportModal() {
+  let devices = [];
+  try { devices = await api('GET', '/devices'); } catch (_) {}
+
+  const backdrop = el('div', { class: 'modal-backdrop' });
+  const box = el('div', { class: 'modal-box', style: 'max-width:600px' });
+
+  box.appendChild(el('h3', { style: 'margin:0 0 var(--space-3)' }, '📥 Export Configurations'));
+
+  const body = el('div', { class: 'export-modal-body' });
+
+  // Device multi-select
+  const selectAllCb = el('input', { type: 'checkbox' });
+  const deviceListEl = el('div', { class: 'export-device-list' });
+  const checkboxes = [];
+  for (const d of devices) {
+    const cb = el('input', { type: 'checkbox', value: String(d.id), 'data-hostname': d.hostname });
+    checkboxes.push(cb);
+    deviceListEl.appendChild(el('label', {}, cb, ` ${escapeHTML(d.hostname)} (${escapeHTML(d.driver)})`));
+  }
+  selectAllCb.onchange = () => checkboxes.forEach(cb => { cb.checked = selectAllCb.checked; });
+  body.append(
+    el('div', { style: 'display:flex;justify-content:space-between;align-items:center' },
+      el('label', { style: 'font-size:var(--font-size-sm);font-weight:600' }, 'Select devices'),
+      el('label', { style: 'font-size:var(--font-size-xs);display:flex;align-items:center;gap:4px;cursor:pointer' }, selectAllCb, ' Select all')),
+    deviceListEl);
+
+  // Format selector
+  let selectedFormat = 'text';
+  const formatGroup = el('div', { class: 'export-format-group' });
+  const formats = [
+    { id: 'text', label: '📄 Plain Text (.cfg)', desc: 'Standard readable config' },
+    { id: 'json', label: '{ } JSON', desc: 'Structured for scripting' },
+    { id: 'zip', label: '📦 ZIP Archive', desc: 'Bundle all as .zip' },
+  ];
+  for (const f of formats) {
+    const btn = el('button', { type: 'button', class: 'export-format-btn' + (f.id === 'text' ? ' selected' : '') }, f.label);
+    btn.onclick = () => {
+      selectedFormat = f.id;
+      formatGroup.querySelectorAll('.export-format-btn').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+    };
+    formatGroup.appendChild(btn);
+  }
+  body.append(
+    el('label', { style: 'font-size:var(--font-size-sm);font-weight:600' }, 'Export format'),
+    formatGroup);
+
+  // Actions
+  const statusEl = el('p', { class: 'muted', style: 'font-size:var(--font-size-xs);min-height:1.2em' });
+  const exportBtn = el('button', { class: 'btn' }, '💾 Download');
+  const cancelBtn = el('button', { class: 'btn ghost' }, 'Cancel');
+  cancelBtn.onclick = () => backdrop.remove();
+
+  exportBtn.onclick = async () => {
+    const ids = checkboxes.filter(cb => cb.checked).map(cb => Number(cb.value));
+    if (!ids.length) { statusEl.textContent = 'Select at least one device.'; statusEl.className = 'error'; return; }
+    statusEl.textContent = 'Exporting…'; statusEl.className = 'muted';
+    exportBtn.disabled = true;
+
+    if (selectedFormat === 'zip') {
+      // Use bulk export endpoint
+      try {
+        const resp = await fetch('/api/v1/export/configs', {
+          method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ device_ids: ids, format: 'text' }),
+        });
+        if (!resp.ok) throw new Error(resp.statusText);
+        const blob = await resp.blob();
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'netmantle-configs.zip';
+        a.click();
+        URL.revokeObjectURL(a.href);
+        statusEl.textContent = '✓ Downloaded'; statusEl.className = 'muted';
+      } catch (e) { statusEl.textContent = 'Export failed: ' + e.message; statusEl.className = 'error'; }
+    } else {
+      // Individual download per device
+      try {
+        const configs = [];
+        for (const id of ids) {
+          const cfg = await api('GET', `/devices/${id}/config`);
+          const dev = devices.find(d => d.id === id);
+          configs.push({ hostname: dev?.hostname || 'device-' + id, config: cfg });
+        }
+        if (selectedFormat === 'json') {
+          const blob = new Blob([JSON.stringify(configs, null, 2)], { type: 'application/json' });
+          const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+          a.download = 'netmantle-configs.json'; a.click();
+        } else {
+          // Single text file concatenated
+          const text = configs.map(c => `# === ${c.hostname} ===\n${c.config}\n`).join('\n');
+          const blob = new Blob([text], { type: 'text/plain' });
+          const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+          a.download = 'netmantle-configs.cfg'; a.click();
+        }
+        statusEl.textContent = '✓ Downloaded'; statusEl.className = 'muted';
+      } catch (e) { statusEl.textContent = 'Export failed: ' + e.message; statusEl.className = 'error'; }
+    }
+    exportBtn.disabled = false;
+  };
+
+  body.append(statusEl, el('div', { style: 'display:flex;gap:8px;justify-content:flex-end' }, cancelBtn, exportBtn));
+  box.appendChild(body);
+  backdrop.appendChild(box);
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) backdrop.remove(); });
+  document.body.appendChild(backdrop);
+}
 
 // ---------- Settings ----------
 views.settings = async (root) => {
@@ -1913,6 +2238,107 @@ views.settings = async (root) => {
           { onchange: function() { localStorage.setItem('nm.retention', this.value); } }),
         'Older git commits are pruned per device. Set to 0 for unlimited.'),
     ));
+
+    // -- Automation Scheduler --
+    area.appendChild(sectionDivider('Automation Scheduler'));
+    const schedWrap = el('div', { class: 'field-group' });
+    schedWrap.appendChild(el('p', { class: 'muted', style: 'font-size:var(--font-size-xs);margin:0 0 12px' },
+      'Schedule recurring backup or push jobs. Cron expressions run in server timezone.'));
+
+    const schedGrid = el('div', { class: 'schedule-grid', id: 'schedule-grid' });
+    schedWrap.appendChild(schedGrid);
+
+    // Load existing schedules
+    async function loadSchedules() {
+      schedGrid.innerHTML = '<p class="muted" style="font-size:var(--font-size-sm)">Loading schedules…</p>';
+      let schedules = [];
+      try { schedules = await api('GET', '/schedules'); } catch (_) {}
+      schedGrid.innerHTML = '';
+      if (!schedules.length) {
+        schedGrid.appendChild(el('p', { class: 'muted', style: 'font-size:var(--font-size-sm)' }, 'No schedules configured.'));
+      }
+      for (const s of schedules) {
+        const toggle = el('input', { type: 'checkbox' });
+        toggle.checked = s.enabled;
+        const sw = el('label', { class: 'toggle-switch' }, toggle, el('span', { class: 'toggle-slider' }));
+        toggle.onchange = async () => {
+          try { await api('PUT', `/schedules/${s.id}`, { ...s, enabled: toggle.checked }); } catch (_) {}
+        };
+        const delBtn = el('button', { class: 'btn ghost', style: 'font-size:0.7rem;padding:3px 8px' }, '🗑');
+        delBtn.onclick = async () => {
+          if (!confirm('Delete this schedule?')) return;
+          try { await api('DELETE', `/schedules/${s.id}`); loadSchedules(); } catch (_) {}
+        };
+        schedGrid.appendChild(el('div', { class: 'schedule-card' },
+          el('div', { class: 'sc-info' },
+            el('span', { class: 'sc-name' }, escapeHTML(s.kind || 'backup') + ': ' + escapeHTML(s.target || 'all')),
+            el('span', { class: 'sc-cron' }, escapeHTML(s.cron_expr || ''))),
+          sw, delBtn));
+      }
+    }
+    loadSchedules();
+
+    // Add new schedule form
+    const addSchedDet = el('details', { style: 'margin-top:12px' },
+      el('summary', { style: 'cursor:pointer;font-weight:600;font-size:var(--font-size-sm)' }, '+ Add schedule'));
+
+    const cronPresets = [
+      { label: 'Every hour', cron: '0 * * * *' },
+      { label: 'Every 4 hours', cron: '0 */4 * * *' },
+      { label: 'Daily 02:00', cron: '0 2 * * *' },
+      { label: 'Daily 06:00', cron: '0 6 * * *' },
+      { label: 'Twice daily', cron: '0 2,14 * * *' },
+      { label: 'Weekly Mon', cron: '0 2 * * 1' },
+    ];
+
+    const cronInput = el('input', { type: 'text', placeholder: '0 */4 * * *', style: 'width:100%;padding:7px 10px;border:1px solid var(--border-default);border-radius:var(--radius-sm);font-family:var(--font-mono);font-size:0.8rem;background:var(--surface-card);color:var(--text-default)' });
+    const presetGrid = el('div', { class: 'cron-preset-grid' });
+    for (const p of cronPresets) {
+      const b = el('div', { class: 'cron-preset' }, p.label);
+      b.onclick = () => {
+        cronInput.value = p.cron;
+        presetGrid.querySelectorAll('.cron-preset').forEach(x => x.classList.remove('selected'));
+        b.classList.add('selected');
+      };
+      presetGrid.appendChild(b);
+    }
+
+    const kindSel = el('select', { style: 'padding:6px 10px;border:1px solid var(--border-default);border-radius:var(--radius-sm);font-size:var(--font-size-sm);background:var(--surface-card);color:var(--text-default)' },
+      el('option', { value: 'backup' }, 'Backup all devices'),
+      el('option', { value: 'push' }, 'Run push job'));
+    const targetInp = el('input', { type: 'text', placeholder: 'all (or group ID)', style: 'padding:6px 10px;border:1px solid var(--border-default);border-radius:var(--radius-sm);font-size:var(--font-size-sm);background:var(--surface-card);color:var(--text-default)' });
+    const addBtn = el('button', { class: 'btn', style: 'margin-top:8px' }, 'Add Schedule');
+    addBtn.onclick = async () => {
+      const cron = cronInput.value.trim();
+      if (!cron) { alert('Enter a cron expression.'); return; }
+      try {
+        await api('POST', '/schedules', {
+          kind: kindSel.value,
+          target: targetInp.value.trim() || 'all',
+          cron_expr: cron,
+          enabled: true,
+        });
+        addSchedDet.open = false;
+        loadSchedules();
+      } catch (err) { alert('Failed: ' + err.message); }
+    };
+
+    addSchedDet.append(el('div', { style: 'margin-top:12px;display:grid;gap:8px' },
+      el('label', { style: 'font-size:var(--font-size-sm);font-weight:600' }, 'Frequency'),
+      presetGrid,
+      el('label', { style: 'font-size:var(--font-size-sm)' }, 'Or enter custom cron expression:'),
+      cronInput,
+      el('span', { class: 'help' }, 'Standard 5-field cron: minute hour day month weekday'),
+      el('div', { style: 'display:grid;grid-template-columns:1fr 1fr;gap:8px' },
+        el('div', {},
+          el('label', { style: 'font-size:var(--font-size-sm);font-weight:600' }, 'Type'),
+          kindSel),
+        el('div', {},
+          el('label', { style: 'font-size:var(--font-size-sm);font-weight:600' }, 'Target'),
+          targetInp)),
+      addBtn));
+    schedWrap.appendChild(addSchedDet);
+    area.appendChild(schedWrap);
 
     saveBar.querySelector('#settings-save').onclick = () => {
       alert('Settings saved locally. Server-side application requires restart or API support.');

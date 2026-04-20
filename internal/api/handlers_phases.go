@@ -1,12 +1,14 @@
 package api
 
 import (
+	"archive/zip"
 	"database/sql"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"sync"
@@ -16,6 +18,8 @@ import (
 	"github.com/i4Edu/netmantle/internal/changes"
 	"github.com/i4Edu/netmantle/internal/compliance"
 	"github.com/i4Edu/netmantle/internal/compliance/rulepacks"
+	"github.com/i4Edu/netmantle/internal/configstore"
+	"github.com/i4Edu/netmantle/internal/devices"
 	"github.com/i4Edu/netmantle/internal/discovery"
 	"github.com/i4Edu/netmantle/internal/netops"
 	"github.com/i4Edu/netmantle/internal/notify"
@@ -577,10 +581,12 @@ func (s *server) handleListPushJobs(w http.ResponseWriter, r *http.Request) {
 }
 
 type createPushJobInput struct {
-	Name          string            `json:"name"`
-	Template      string            `json:"template"`
-	Variables     map[string]string `json:"variables,omitempty"`
-	TargetGroupID *int64            `json:"target_group_id,omitempty"`
+	Name             string            `json:"name"`
+	Template         string            `json:"template"`
+	Variables        map[string]string `json:"variables,omitempty"`
+	TargetGroupID    *int64            `json:"target_group_id,omitempty"`
+	VerifyCommand    string            `json:"verify_command,omitempty"`
+	RollbackTemplate string            `json:"rollback_template,omitempty"`
 }
 
 func (s *server) handleCreatePushJob(w http.ResponseWriter, r *http.Request) {
@@ -597,6 +603,14 @@ func (s *server) handleCreatePushJob(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	// Persist verify_command and rollback_template if provided.
+	if in.VerifyCommand != "" || in.RollbackTemplate != "" {
+		if db, ok := s.DB.(*sql.DB); ok && db != nil {
+			_, _ = db.ExecContext(r.Context(),
+				`UPDATE push_jobs SET verify_command=?, rollback_template=? WHERE id=?`,
+				in.VerifyCommand, in.RollbackTemplate, j.ID)
+		}
 	}
 	writeJSON(w, http.StatusCreated, j)
 }
@@ -1074,6 +1088,316 @@ func (s *server) handlePutMirror(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.GitOps.Configure(r.Context(), u.TenantID, in.RemoteURL, in.Branch, in.Token); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ============================================================
+
+// ============================================================
+// Config version history + bulk export
+// ============================================================
+
+func (s *server) handleListConfigVersions(w http.ResponseWriter, r *http.Request) {
+	u := userFromContext(r.Context())
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	if s.ConfigStore == nil {
+		writeError(w, http.StatusInternalServerError, "config store not configured")
+		return
+	}
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	entries, err := s.ConfigStore.ListVersions(u.TenantID, id, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if entries == nil {
+		entries = []configstore.VersionEntry{}
+	}
+	writeJSON(w, http.StatusOK, entries)
+}
+
+type exportConfigsInput struct {
+	DeviceIDs []int64 `json:"device_ids"`
+	Format    string  `json:"format"`
+}
+
+func (s *server) handleExportConfigs(w http.ResponseWriter, r *http.Request) {
+	u := userFromContext(r.Context())
+	var in exportConfigsInput
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(in.DeviceIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "device_ids required")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", "attachment; filename=configs.zip")
+	zw := zip.NewWriter(w)
+	defer zw.Close()
+
+	for _, devID := range in.DeviceIDs {
+		dev, err := s.Devices.GetDevice(r.Context(), u.TenantID, devID)
+		if err != nil {
+			continue
+		}
+		body, _, err := s.Backup.LatestVersion(r.Context(), u.TenantID, devID, "")
+		if err != nil {
+			continue
+		}
+		fw, err := zw.Create(dev.Hostname + ".cfg")
+		if err != nil {
+			continue
+		}
+		_, _ = fw.Write(body)
+	}
+}
+
+// ============================================================
+// Push job preflight
+// ============================================================
+
+type preflightResult struct {
+	DeviceID  int64  `json:"device_id"`
+	Hostname  string `json:"hostname"`
+	Reachable bool   `json:"reachable"`
+	LatencyMs int64  `json:"latency_ms,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+func (s *server) handlePreflight(w http.ResponseWriter, r *http.Request) {
+	u := userFromContext(r.Context())
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	j, err := s.Automation.GetJob(r.Context(), u.TenantID, id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "job not found")
+		return
+	}
+	devs, err := s.Devices.ListDevices(r.Context(), u.TenantID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Filter to target group if set.
+	var targets []devices.Device
+	for _, d := range devs {
+		if j.TargetGroupID == nil || (d.GroupID != nil && *d.GroupID == *j.TargetGroupID) {
+			targets = append(targets, d)
+		}
+	}
+
+	results := make([]preflightResult, len(targets))
+	var wg sync.WaitGroup
+	for i, d := range targets {
+		wg.Add(1)
+		go func(idx int, dev devices.Device) {
+			defer wg.Done()
+			pr := preflightResult{DeviceID: dev.ID, Hostname: dev.Hostname}
+			addr := net.JoinHostPort(dev.Address, strconv.Itoa(dev.Port))
+			start := time.Now()
+			conn, dialErr := net.DialTimeout("tcp", addr, 5*time.Second)
+			if dialErr != nil {
+				pr.Error = dialErr.Error()
+			} else {
+				pr.Reachable = true
+				pr.LatencyMs = time.Since(start).Milliseconds()
+				conn.Close()
+			}
+			results[idx] = pr
+		}(i, d)
+	}
+	wg.Wait()
+	writeJSON(w, http.StatusOK, map[string]any{"results": results})
+}
+
+// ============================================================
+// Schedules CRUD
+// ============================================================
+
+type Schedule struct {
+	ID        int64  `json:"id"`
+	TenantID  int64  `json:"tenant_id"`
+	Kind      string `json:"kind"`
+	Name      string `json:"name"`
+	CronExpr  string `json:"cron_expr"`
+	TargetID  int64  `json:"target_id"`
+	Enabled   bool   `json:"enabled"`
+	LastRunAt string `json:"last_run_at,omitempty"`
+	NextRunAt string `json:"next_run_at,omitempty"`
+	CreatedAt string `json:"created_at,omitempty"`
+}
+
+func (s *server) handleListSchedules(w http.ResponseWriter, r *http.Request) {
+	u := userFromContext(r.Context())
+	db, ok := s.DB.(*sql.DB)
+	if !ok || db == nil {
+		writeError(w, http.StatusInternalServerError, "database unavailable")
+		return
+	}
+	rows, err := db.QueryContext(r.Context(),
+		`SELECT id, tenant_id, kind, name, cron_expr, target_id, enabled, last_run_at, next_run_at, created_at
+		 FROM schedules WHERE tenant_id=? ORDER BY id`, u.TenantID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer rows.Close()
+	var out []Schedule
+	for rows.Next() {
+		var sc Schedule
+		var enabled int
+		if err := rows.Scan(&sc.ID, &sc.TenantID, &sc.Kind, &sc.Name, &sc.CronExpr,
+			&sc.TargetID, &enabled, &sc.LastRunAt, &sc.NextRunAt, &sc.CreatedAt); err != nil {
+			continue
+		}
+		sc.Enabled = enabled != 0
+		out = append(out, sc)
+	}
+	if out == nil {
+		out = []Schedule{}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+type createScheduleInput struct {
+	Kind     string `json:"kind"`
+	Name     string `json:"name"`
+	CronExpr string `json:"cron_expr"`
+	TargetID int64  `json:"target_id"`
+	Enabled  *bool  `json:"enabled,omitempty"`
+}
+
+func (s *server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
+	u := userFromContext(r.Context())
+	db, ok := s.DB.(*sql.DB)
+	if !ok || db == nil {
+		writeError(w, http.StatusInternalServerError, "database unavailable")
+		return
+	}
+	var in createScheduleInput
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if in.Kind != "backup" && in.Kind != "push" {
+		writeError(w, http.StatusBadRequest, "kind must be 'backup' or 'push'")
+		return
+	}
+	enabled := 1
+	if in.Enabled != nil && !*in.Enabled {
+		enabled = 0
+	}
+	res, err := db.ExecContext(r.Context(),
+		`INSERT INTO schedules(tenant_id, kind, name, cron_expr, target_id, enabled) VALUES(?, ?, ?, ?, ?, ?)`,
+		u.TenantID, in.Kind, in.Name, in.CronExpr, in.TargetID, enabled)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	id, _ := res.LastInsertId()
+	writeJSON(w, http.StatusCreated, Schedule{
+		ID: id, TenantID: u.TenantID, Kind: in.Kind, Name: in.Name,
+		CronExpr: in.CronExpr, TargetID: in.TargetID, Enabled: enabled != 0,
+	})
+}
+
+type updateScheduleInput struct {
+	Name     *string `json:"name,omitempty"`
+	CronExpr *string `json:"cron_expr,omitempty"`
+	TargetID *int64  `json:"target_id,omitempty"`
+	Enabled  *bool   `json:"enabled,omitempty"`
+}
+
+func (s *server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
+	u := userFromContext(r.Context())
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	db, dbOK := s.DB.(*sql.DB)
+	if !dbOK || db == nil {
+		writeError(w, http.StatusInternalServerError, "database unavailable")
+		return
+	}
+	var in updateScheduleInput
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Verify schedule belongs to this tenant.
+	var exists int
+	if err := db.QueryRowContext(r.Context(),
+		`SELECT COUNT(1) FROM schedules WHERE tenant_id=? AND id=?`, u.TenantID, id).Scan(&exists); err != nil || exists == 0 {
+		writeError(w, http.StatusNotFound, "schedule not found")
+		return
+	}
+	if in.Name != nil {
+		db.ExecContext(r.Context(), `UPDATE schedules SET name=? WHERE tenant_id=? AND id=?`, *in.Name, u.TenantID, id)
+	}
+	if in.CronExpr != nil {
+		db.ExecContext(r.Context(), `UPDATE schedules SET cron_expr=? WHERE tenant_id=? AND id=?`, *in.CronExpr, u.TenantID, id)
+	}
+	if in.TargetID != nil {
+		db.ExecContext(r.Context(), `UPDATE schedules SET target_id=? WHERE tenant_id=? AND id=?`, *in.TargetID, u.TenantID, id)
+	}
+	if in.Enabled != nil {
+		v := 0
+		if *in.Enabled {
+			v = 1
+		}
+		db.ExecContext(r.Context(), `UPDATE schedules SET enabled=? WHERE tenant_id=? AND id=?`, v, u.TenantID, id)
+	}
+	// Return updated schedule.
+	var sc Schedule
+	var enabled int
+	err := db.QueryRowContext(r.Context(),
+		`SELECT id, tenant_id, kind, name, cron_expr, target_id, enabled, last_run_at, next_run_at, created_at
+		 FROM schedules WHERE tenant_id=? AND id=?`, u.TenantID, id).Scan(
+		&sc.ID, &sc.TenantID, &sc.Kind, &sc.Name, &sc.CronExpr,
+		&sc.TargetID, &enabled, &sc.LastRunAt, &sc.NextRunAt, &sc.CreatedAt)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	sc.Enabled = enabled != 0
+	writeJSON(w, http.StatusOK, sc)
+}
+
+func (s *server) handleDeleteSchedule(w http.ResponseWriter, r *http.Request) {
+	u := userFromContext(r.Context())
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	db, dbOK := s.DB.(*sql.DB)
+	if !dbOK || db == nil {
+		writeError(w, http.StatusInternalServerError, "database unavailable")
+		return
+	}
+	res, err := db.ExecContext(r.Context(),
+		`DELETE FROM schedules WHERE tenant_id=? AND id=?`, u.TenantID, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		writeError(w, http.StatusNotFound, "schedule not found")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

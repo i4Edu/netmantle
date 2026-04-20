@@ -26,6 +26,7 @@ import (
 	"github.com/i4Edu/netmantle/internal/changereq"
 	"github.com/i4Edu/netmantle/internal/changes"
 	"github.com/i4Edu/netmantle/internal/compliance"
+	"github.com/i4Edu/netmantle/internal/configstore"
 	"github.com/i4Edu/netmantle/internal/credentials"
 	"github.com/i4Edu/netmantle/internal/devices"
 	"github.com/i4Edu/netmantle/internal/discovery"
@@ -71,8 +72,9 @@ type Deps struct {
 
 	// Phase A..E feature services. Each is optional so existing
 	// integration tests that only wire the minimum continue to work.
-	ChangeReq *changereq.Service
-	APITokens *apitokens.Service
+	ChangeReq   *changereq.Service
+	APITokens   *apitokens.Service
+	ConfigStore *configstore.Store
 
 	DB any // *sql.DB; opaque here to avoid an import cycle
 }
@@ -109,6 +111,8 @@ func NewServer(d Deps) http.Handler {
 	mux.Handle("POST /api/v1/devices/{id}/backup", s.auth(s.requireWrite(s.handleBackupNow)))
 	mux.Handle("GET /api/v1/devices/{id}/runs", s.auth(s.handleListRuns))
 	mux.Handle("GET /api/v1/devices/{id}/config", s.auth(s.handleGetConfig))
+	mux.Handle("GET /api/v1/devices/{id}/config/versions", s.auth(s.handleListConfigVersions))
+	mux.Handle("POST /api/v1/export/configs", s.auth(s.handleExportConfigs))
 
 	mux.Handle("GET /api/v1/device-groups", s.auth(s.handleListGroups))
 	mux.Handle("POST /api/v1/device-groups", s.auth(s.requireWrite(s.handleCreateGroup)))
@@ -173,6 +177,7 @@ func NewServer(d Deps) http.Handler {
 		// Direct push requires admin role (or the apply:direct API-token
 		// scope). Other callers must go through the change-request flow.
 		mux.Handle("POST /api/v1/push/jobs/{id}/run", s.auth(s.requireWrite(s.handleRunPushGuarded)))
+		mux.Handle("POST /api/v1/push/jobs/{id}/preflight", s.auth(s.handlePreflight))
 	}
 
 	// Phase 7 — pollers + in-app CLI.
@@ -210,6 +215,12 @@ func NewServer(d Deps) http.Handler {
 		mux.Handle("GET /api/v1/gitops/mirror", s.auth(s.handleGetMirror))
 		mux.Handle("PUT /api/v1/gitops/mirror", s.auth(s.requireAdmin(s.handlePutMirror)))
 	}
+
+	// Schedules CRUD.
+	mux.Handle("GET /api/v1/schedules", s.auth(s.handleListSchedules))
+	mux.Handle("POST /api/v1/schedules", s.auth(s.requireWrite(s.handleCreateSchedule)))
+	mux.Handle("PUT /api/v1/schedules/{id}", s.auth(s.requireWrite(s.handleUpdateSchedule)))
+	mux.Handle("DELETE /api/v1/schedules/{id}", s.auth(s.requireWrite(s.handleDeleteSchedule)))
 
 	// Approval workflow + rollback (Phases B & D).
 	if d.ChangeReq != nil {

@@ -240,6 +240,51 @@ func readAll(r interface{ Read([]byte) (int, error) }, buf []byte) (int, error) 
 	return off, nil
 }
 
+// VersionEntry describes a single commit in a device's config history.
+type VersionEntry struct {
+	SHA     string    `json:"sha"`
+	Date    time.Time `json:"date"`
+	Message string    `json:"message"`
+}
+
+// ListVersions returns the most recent commit history for a device repo.
+func (s *Store) ListVersions(tenantID, deviceID int64, limit int) ([]VersionEntry, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	repoPath := filepath.Join(s.Root,
+		strconv.FormatInt(tenantID, 10),
+		strconv.FormatInt(deviceID, 10),
+	)
+	repo, err := git.PlainOpen(repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("configstore: open: %w", err)
+	}
+	ref, err := repo.Head()
+	if err != nil {
+		return nil, fmt.Errorf("configstore: head: %w", err)
+	}
+	iter, err := repo.Log(&git.LogOptions{From: ref.Hash()})
+	if err != nil {
+		return nil, fmt.Errorf("configstore: log: %w", err)
+	}
+	defer iter.Close()
+
+	var entries []VersionEntry
+	for i := 0; i < limit; i++ {
+		c, err := iter.Next()
+		if err != nil {
+			break
+		}
+		entries = append(entries, VersionEntry{
+			SHA:     c.Hash.String(),
+			Date:    c.Author.When,
+			Message: c.Message,
+		})
+	}
+	return entries, nil
+}
+
 // silence "imported and not used" possibilities while keeping the dep.
 var _ = plumbing.ZeroHash
 

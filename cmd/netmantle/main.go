@@ -384,7 +384,8 @@ func runServe(argv []string) error {
 		Tenants: tenantsSvc, Pollers: pollerSvc,
 		Terminal: terminalSvc, GitOps: gitopsSvc,
 		ChangeReq: changeReqSvc, APITokens: apiTokensSvc,
-		DB: db,
+		ConfigStore: store,
+		DB:          db,
 	})
 
 	srv := &http.Server{
