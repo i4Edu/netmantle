@@ -25,3 +25,4 @@ coverage.html
 # Environment
 .env
 .env.local
+netmantle

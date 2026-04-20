@@ -14,11 +14,15 @@ It is delivered as a single Go binary (modular monolith) with SQLite‑first
 persistence, container and Helm packaging, signed releases, and an SBOM with
 every tag.
 
-> **Status:** pre‑1.0. Phases 0–10 of the project plan are landed; remaining
-> hardening items (expanded driver/rule packs, automation `Apply()` execution,
-> HA chaos/scale validation) are tracked explicitly in
-> [`docs/roadmap.md`](docs/roadmap.md). APIs and storage formats are not yet
-> frozen — see [SECURITY.md](SECURITY.md) for the current security posture.
+> **Status:** 1.0‑RC1. Phases 0–10 of the project plan are landed, including
+> native RESTCONF / gNMI transport integration, gRPC+mTLS distributed‑poller
+> listener, the full driver pack, and **automation `Apply()` live execution**
+> for SSH/CLI drivers. RESTCONF, gNMI, and NETCONF are wired for native
+> transport/capture flows in this release, but are not yet general-purpose
+> automation apply paths. Remaining hardening items (HA chaos/scale
+> validation) are tracked in
+> [`docs/roadmap.md`](docs/roadmap.md). The V1 API surface is now frozen —
+> see [SECURITY.md](SECURITY.md) for the current security posture.
 
 ---
 
@@ -72,11 +76,11 @@ items are usable today; *Follow‑up* items are tracked but not yet hardened.
 | 3 | Auditing & search | SQLite FTS5 full‑text search, saved searches, CSV export | Advanced indexing & large‑scale tuning |
 | 4 | Configuration compliance | Rules / rulesets / findings with transition notifications | Expanded rule packs, richer remediation |
 | 5 | Discovery & NMS sync | TCP / banner scan, NetBox JSON import | SNMP enrichment, LibreNMS / Zabbix sync |
-| 6 | Push / pull automation | Push‑job CRUD, template rendering, preview, grouped results | Per‑driver `Apply()` execution path (currently preview‑only) |
+| 6 | Push / pull automation | Push‑job CRUD, template rendering, preview, grouped results, **per-driver `Apply()` live execution via transport routing** | — |
 | 7 | In‑app CLI & distributed pollers | Web terminal with transcript/audit, poller registration + heartbeat, mTLS gRPC listener shell | Full poller RPC method registration and remote execution hardening |
 | 8 | Runtime state auditing & compliance | Probe framework + runtime checks | Broader probe library and policy packs |
 | 9 | Multi‑tenancy & HA | Tenant CRUD, quotas, leader‑elected scheduler, Helm chart | Automated HA / failover validation, scale testing |
-| 10 | Hardening + modern transports + topology + GitOps mirror | NETCONF helpers, RESTCONF + gNMI native backup wiring, LLDP/CDP topology API + graph-canvas renderer, GitOps mirror, signed release + SBOM workflow | Per-driver `Apply()` execution path, additional transport hardening |
+| 10 | Hardening + modern transports + topology + GitOps mirror | NETCONF helpers, RESTCONF + gNMI native backup wiring, LLDP/CDP topology API + graph-canvas renderer, GitOps mirror, signed release + SBOM workflow | Additional transport hardening |
 
 ## Architecture at a glance
 
