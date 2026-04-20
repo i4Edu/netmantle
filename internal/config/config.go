@@ -36,8 +36,11 @@ type ServerConfig struct {
 }
 
 type DatabaseConfig struct {
-	Driver string `yaml:"driver"`
-	DSN    string `yaml:"dsn"`
+	Driver          string        `yaml:"driver"`
+	DSN             string        `yaml:"dsn"`
+	MaxOpenConns    int           `yaml:"max_open_conns"`
+	MaxIdleConns    int           `yaml:"max_idle_conns"`
+	ConnMaxLifetime time.Duration `yaml:"conn_max_lifetime"`
 }
 
 type StorageConfig struct {
@@ -66,10 +69,11 @@ type PollerConfig struct {
 }
 
 type PollerGRPCConfig struct {
-	Address         string `yaml:"address"`
-	TLSCertFile     string `yaml:"tls_cert_file"`
-	TLSKeyFile      string `yaml:"tls_key_file"`
-	TLSClientCAFile string `yaml:"tls_client_ca_file"`
+	Address         string        `yaml:"address"`
+	TLSCertFile     string        `yaml:"tls_cert_file"`
+	TLSKeyFile      string        `yaml:"tls_key_file"`
+	TLSClientCAFile string        `yaml:"tls_client_ca_file"`
+	Timeout         time.Duration `yaml:"timeout"`
 }
 
 // Default returns a Config populated with sensible defaults.
@@ -81,8 +85,11 @@ func Default() Config {
 			WriteTimeout: 30 * time.Second,
 		},
 		Database: DatabaseConfig{
-			Driver: "sqlite",
-			DSN:    "data/netmantle.db",
+			Driver:          "sqlite",
+			DSN:             "data/netmantle.db",
+			MaxOpenConns:    1,
+			MaxIdleConns:    1,
+			ConnMaxLifetime: 30 * time.Minute,
 		},
 		Storage: StorageConfig{
 			ConfigRepoRoot: "data/configs",
@@ -102,6 +109,7 @@ func Default() Config {
 		Poller: PollerConfig{
 			GRPC: PollerGRPCConfig{
 				Address: "",
+				Timeout: 15 * time.Second,
 			},
 		},
 	}
@@ -139,6 +147,18 @@ func (c Config) Validate() error {
 	if c.Database.DSN == "" {
 		return errors.New("database.dsn must be set")
 	}
+	if c.Database.MaxOpenConns < 1 {
+		return errors.New("database.max_open_conns must be >= 1")
+	}
+	if c.Database.MaxIdleConns < 0 {
+		return errors.New("database.max_idle_conns must be >= 0")
+	}
+	if c.Database.MaxIdleConns > c.Database.MaxOpenConns {
+		return errors.New("database.max_idle_conns must be <= database.max_open_conns")
+	}
+	if c.Database.ConnMaxLifetime < 0 {
+		return errors.New("database.conn_max_lifetime must be >= 0")
+	}
 	if c.Storage.ConfigRepoRoot == "" {
 		return errors.New("storage.config_repo_root must be set")
 	}
@@ -172,6 +192,21 @@ func applyEnv(c *Config) {
 	}
 	if v := os.Getenv("NETMANTLE_DATABASE_DSN"); v != "" {
 		c.Database.DSN = v
+	}
+	if v := os.Getenv("NETMANTLE_DATABASE_MAX_OPEN_CONNS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.Database.MaxOpenConns = n
+		}
+	}
+	if v := os.Getenv("NETMANTLE_DATABASE_MAX_IDLE_CONNS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			c.Database.MaxIdleConns = n
+		}
+	}
+	if v := os.Getenv("NETMANTLE_DATABASE_CONN_MAX_LIFETIME"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d >= 0 {
+			c.Database.ConnMaxLifetime = d
+		}
 	}
 	if v := os.Getenv("NETMANTLE_STORAGE_CONFIG_REPO_ROOT"); v != "" {
 		c.Storage.ConfigRepoRoot = v
@@ -209,5 +244,10 @@ func applyEnv(c *Config) {
 	}
 	if v := os.Getenv("NETMANTLE_POLLER_GRPC_TLS_CLIENT_CA_FILE"); v != "" {
 		c.Poller.GRPC.TLSClientCAFile = v
+	}
+	if v := os.Getenv("NETMANTLE_POLLER_GRPC_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			c.Poller.GRPC.Timeout = d
+		}
 	}
 }

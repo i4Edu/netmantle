@@ -7,9 +7,11 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -98,6 +100,16 @@ func runServe(argv []string) error {
 		return err
 	}
 	defer db.Close()
+	if cfg.Database.Driver == "sqlite" {
+		// Preserve storage.Open's SQLite guardrail: a single-connection pool
+		// reduces lock contention and SQLITE_BUSY errors in sqlite-first builds.
+		db.SetMaxOpenConns(1)
+		db.SetMaxIdleConns(1)
+	} else {
+		db.SetMaxOpenConns(cfg.Database.MaxOpenConns)
+		db.SetMaxIdleConns(cfg.Database.MaxIdleConns)
+	}
+	db.SetConnMaxLifetime(cfg.Database.ConnMaxLifetime)
 
 	mctx, mcancel := context.WithTimeout(context.Background(), 30*time.Second)
 	if err := storage.Migrate(mctx, db); err != nil {
@@ -305,6 +317,32 @@ func runServe(argv []string) error {
 		}
 		return output, nil
 	})
+	automationSvc.Audit = auditSvc
+	automationSvc.PreFlight = func(ctx context.Context, d devices.Device) error {
+		if d.CredentialID == nil {
+			return fmt.Errorf("automation: device %q (id %d) has no credential", d.Hostname, d.ID)
+		}
+		addr := d.Address
+		if _, _, err := net.SplitHostPort(addr); err != nil {
+			port := d.Port
+			if port <= 0 {
+				port = 22
+			}
+			addr = net.JoinHostPort(addr, strconv.Itoa(port))
+		}
+		checkTimeout := 5 * time.Second
+		if cfg.Backup.Timeout > 0 && cfg.Backup.Timeout < checkTimeout {
+			checkTimeout = cfg.Backup.Timeout
+		}
+		dialer := net.Dialer{Timeout: checkTimeout}
+		dialCtx, cancel := context.WithTimeout(ctx, checkTimeout)
+		defer cancel()
+		conn, err := dialer.DialContext(dialCtx, "tcp", addr)
+		if err != nil {
+			return fmt.Errorf("automation: pre-flight reachability check failed: %w", err)
+		}
+		return conn.Close()
+	}
 
 	// Wire post-backup hooks: detect changes, index for search, evaluate
 	// compliance, dispatch notifications, optionally mirror.
@@ -417,7 +455,7 @@ func runServe(argv []string) error {
 		return err
 	}
 	if grpcSrv != nil {
-		grpcSrv.Shutdown(5 * time.Second)
+		grpcSrv.Shutdown(cfg.Poller.GRPC.Timeout)
 	}
 	_ = slog.Default()
 	return nil

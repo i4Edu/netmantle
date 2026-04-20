@@ -30,6 +30,9 @@ server:
 database:
   driver: "sqlite"        # sqlite (default) — postgres is on the roadmap
   dsn:    "data/netmantle.db"
+  max_open_conns: 1       # sqlite-safe default (single-connection pool)
+  max_idle_conns: 1       # keep <= max_open_conns
+  conn_max_lifetime: "30m"
 
 storage:
   config_repo_root: "data/configs"  # parent dir for per-device git repos
@@ -51,6 +54,7 @@ backup:
 poller:
   grpc:
     address: ""                # empty disables gRPC listener shell
+    timeout: "15s"             # graceful shutdown timeout for in-flight RPCs
     tls_cert_file: ""          # required when address is set
     tls_key_file: ""           # required when address is set
     tls_client_ca_file: ""     # required when address is set (mTLS)
@@ -66,6 +70,9 @@ Only the variables in the table below are honoured. Anything else with the
 | `NETMANTLE_SERVER_ADDRESS` | `server.address` | e.g. `:8080`, `127.0.0.1:8080` |
 | `NETMANTLE_DATABASE_DRIVER` | `database.driver` | `sqlite` today |
 | `NETMANTLE_DATABASE_DSN` | `database.dsn` | path for sqlite |
+| `NETMANTLE_DATABASE_MAX_OPEN_CONNS` | `database.max_open_conns` | integer; sqlite runtime is clamped to 1 |
+| `NETMANTLE_DATABASE_MAX_IDLE_CONNS` | `database.max_idle_conns` | integer; must be <= max_open_conns |
+| `NETMANTLE_DATABASE_CONN_MAX_LIFETIME` | `database.conn_max_lifetime` | Go duration, e.g. `30m` |
 | `NETMANTLE_STORAGE_CONFIG_REPO_ROOT` | `storage.config_repo_root` | parent dir for per‑device git repos |
 | `NETMANTLE_SECURITY_MASTER_PASSPHRASE` | `security.master_passphrase` | **required**; never log; source from a secret manager in production |
 | `NETMANTLE_SECURITY_SESSION_KEY` | `security.session_key` | hex/random string used to sign session cookies; auto‑generated if empty |
@@ -77,6 +84,7 @@ Only the variables in the table below are honoured. Anything else with the
 | `NETMANTLE_POLLER_GRPC_TLS_CERT_FILE` | `poller.grpc.tls_cert_file` | server certificate path for poller gRPC mTLS |
 | `NETMANTLE_POLLER_GRPC_TLS_KEY_FILE` | `poller.grpc.tls_key_file` | server private key path for poller gRPC mTLS |
 | `NETMANTLE_POLLER_GRPC_TLS_CLIENT_CA_FILE` | `poller.grpc.tls_client_ca_file` | client CA bundle for mTLS verification |
+| `NETMANTLE_POLLER_GRPC_TIMEOUT` | `poller.grpc.timeout` | Go duration for gRPC graceful shutdown timeout |
 
 There is also one *startup‑only* env var consumed by `cmd/netmantle/main.go`:
 
@@ -102,6 +110,10 @@ There is also one *startup‑only* env var consumed by `cmd/netmantle/main.go`:
   against the working directory. In containers point this at the persistent
   volume (the published image defaults it to
   `/var/lib/netmantle/netmantle.db`).
+- **`max_open_conns` / `max_idle_conns`** — connection pool limits. In this
+  sqlite-first build, runtime clamps SQLite to `1/1` to reduce lock contention
+  and `SQLITE_BUSY` errors.
+- **`conn_max_lifetime`** — max age for pooled DB connections.
 
 ### `storage`
 
@@ -143,6 +155,8 @@ There is also one *startup‑only* env var consumed by `cmd/netmantle/main.go`:
   when `poller.grpc.address` is set. NetMantle enforces mutual TLS
   (`RequireAndVerifyClientCert`) so only pollers with certificates signed by
   the configured client CA can complete the handshake.
+- **`timeout`** — graceful-stop deadline used when shutting down the poller
+  gRPC listener with in-flight RPCs.
 
 ## Secret handling
 
