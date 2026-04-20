@@ -30,9 +30,12 @@ type Pack struct {
 // All returns every built-in rule pack keyed by name.
 func All() map[string]Pack {
 	return map[string]Pack{
-		"isp-baseline":      ISPBaseline,
-		"cisco-ios-cis":     CiscoIOSCIS,
-		"mikrotik-baseline": MikroTikBaseline,
+		"isp-baseline":        ISPBaseline,
+		"cisco-ios-cis":       CiscoIOSCIS,
+		"mikrotik-baseline":   MikroTikBaseline,
+		"junos-baseline":      JunosBaseline,
+		"nokia-sros-baseline": NokiaSROSBaseline,
+		"huawei-vrp-baseline": HuaweiVRPBaseline,
 	}
 }
 
@@ -229,5 +232,48 @@ var MikroTikBaseline = Pack{
 			Severity:    "high",
 			Description: "Firewall filter rules should be configured to restrict inbound management access.",
 		},
+	},
+}
+
+// JunosBaseline contains baseline checks for Juniper Junos configuration style.
+var JunosBaseline = Pack{
+	Name:        "junos-baseline",
+	Version:     "1.0",
+	Description: "Baseline for Juniper Junos devices. Checks SSH service, root authentication, NTP, SNMP v3 posture, and login banners.",
+	Rules: []compliance.Rule{
+		{Name: "junos-baseline: SSH service enabled", Kind: "must_include", Pattern: "set system services ssh", Severity: "high", Description: "SSH should be enabled for secure device management."},
+		{Name: "junos-baseline: root authentication configured", Kind: "regex", Pattern: `set\s+system\s+root-authentication\s+`, Severity: "critical", Description: "Root authentication must be configured and hashed."},
+		{Name: "junos-baseline: NTP server configured", Kind: "regex", Pattern: `set\s+system\s+ntp\s+server`, Severity: "medium", Description: "At least one NTP server should be configured."},
+		{Name: "junos-baseline: SNMPv1/v2c community not public", Kind: "must_exclude", Pattern: "set snmp community public", Severity: "critical", Description: "Default public SNMP community should not be present."},
+		{Name: "junos-baseline: login banner configured", Kind: "regex", Pattern: `set\s+system\s+login\s+message`, Severity: "low", Description: "A login/legal banner should be configured."},
+	},
+}
+
+// NokiaSROSBaseline contains baseline checks for Nokia SR OS / TiMOS.
+var NokiaSROSBaseline = Pack{
+	Name:        "nokia-sros-baseline",
+	Version:     "1.0",
+	Description: "Baseline for Nokia SR OS. Checks SSH management access, AAA posture, NTP, SNMP community hygiene, and logging.",
+	Rules: []compliance.Rule{
+		{Name: "nokia-sros-baseline: SSH enabled", Kind: "regex", Pattern: `(?i)ssh`, Severity: "high", Description: "Secure remote management via SSH should be enabled."},
+		{Name: "nokia-sros-baseline: AAA profile present", Kind: "regex", Pattern: `(?i)(aaa|radius|tacacs)`, Severity: "medium", Description: "AAA integration should be configured."},
+		{Name: "nokia-sros-baseline: NTP configured", Kind: "regex", Pattern: `(?i)\bntp\b`, Severity: "medium", Description: "NTP should be configured for accurate timestamps."},
+		{Name: "nokia-sros-baseline: SNMP public community absent", Kind: "must_exclude", Pattern: "community public", Severity: "critical", Description: "SNMP public community should be removed."},
+		{Name: "nokia-sros-baseline: remote logging configured", Kind: "regex", Pattern: `(?i)(log-id|syslog)`, Severity: "low", Description: "Remote logging should be configured for operational auditability."},
+	},
+}
+
+// HuaweiVRPBaseline contains baseline checks for Huawei VRP.
+var HuaweiVRPBaseline = Pack{
+	Name:        "huawei-vrp-baseline",
+	Version:     "1.0",
+	Description: "Baseline for Huawei VRP. Checks SSH/STelnet usage, AAA, NTP, SNMP community posture, and info-center logging.",
+	Rules: []compliance.Rule{
+		{Name: "huawei-vrp-baseline: STelnet/SSH enabled", Kind: "regex", Pattern: `(?i)(stelnet|ssh\s+server\s+enable)`, Severity: "high", Description: "Secure SSH (STelnet) should be enabled."},
+		{Name: "huawei-vrp-baseline: Telnet service disabled", Kind: "must_exclude", Pattern: "telnet server enable", Severity: "high", Description: "Telnet should be disabled."},
+		{Name: "huawei-vrp-baseline: AAA configured", Kind: "regex", Pattern: `(?i)\baaa\b`, Severity: "medium", Description: "AAA configuration should be present."},
+		{Name: "huawei-vrp-baseline: NTP service configured", Kind: "regex", Pattern: `(?i)\bntp-service\b`, Severity: "medium", Description: "NTP service should be configured."},
+		{Name: "huawei-vrp-baseline: SNMP public community absent", Kind: "must_exclude", Pattern: "snmp-agent community read public", Severity: "critical", Description: "Default SNMP public community must not be present."},
+		{Name: "huawei-vrp-baseline: info-center logging enabled", Kind: "regex", Pattern: `(?i)info-center`, Severity: "low", Description: "Centralized logging should be configured via info-center."},
 	},
 }

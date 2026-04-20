@@ -98,3 +98,61 @@ func TestRejectInvalidRule(t *testing.T) {
 		t.Fatal("expected ordered_block validation error")
 	}
 }
+
+func TestEvaluateDeviceHonorsGroupScopedRules(t *testing.T) {
+	svc, tid, dev := newSvc(t)
+	// Create one group and move the device there.
+	res, err := svc.DB.Exec(`INSERT INTO device_groups(tenant_id, name, created_at) VALUES(?, 'edge', ?)`,
+		tid, time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gid, _ := res.LastInsertId()
+	if _, err := svc.DB.Exec(`UPDATE devices SET group_id=? WHERE id=?`, gid, dev); err != nil {
+		t.Fatal(err)
+	}
+	// Group-scoped rule.
+	if _, err := svc.UpsertRule(context.Background(), Rule{
+		TenantID: tid, GroupID: &gid,
+		Name: "group-only", Kind: "must_include", Pattern: "set system services ssh",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Global rule.
+	if _, err := svc.UpsertRule(context.Background(), Rule{
+		TenantID: tid,
+		Name:     "global-only", Kind: "must_include", Pattern: "ntp server",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	findings, err := svc.EvaluateDevice(context.Background(), tid, dev, "set system services ssh\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(findings) != 2 {
+		t.Fatalf("expected 2 findings, got %d", len(findings))
+	}
+	statusByRule := map[int64]string{}
+	for _, f := range findings {
+		statusByRule[f.RuleID] = f.Status
+	}
+	var (
+		groupRuleID  int64
+		globalRuleID int64
+	)
+	if err := svc.DB.QueryRow(`SELECT id FROM compliance_rules WHERE tenant_id=? AND name='group-only' AND group_id=?`,
+		tid, gid).Scan(&groupRuleID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.DB.QueryRow(`SELECT id FROM compliance_rules WHERE tenant_id=? AND name='global-only' AND group_id IS NULL`,
+		tid).Scan(&globalRuleID); err != nil {
+		t.Fatal(err)
+	}
+	if statusByRule[groupRuleID] != "pass" {
+		t.Fatalf("expected group rule %d to pass, got %q", groupRuleID, statusByRule[groupRuleID])
+	}
+	if statusByRule[globalRuleID] != "fail" {
+		t.Fatalf("expected global rule %d to fail, got %q", globalRuleID, statusByRule[globalRuleID])
+	}
+}

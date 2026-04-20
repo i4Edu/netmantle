@@ -385,6 +385,44 @@ paths:
                     type: array
                     items: {$ref: '#/components/schemas/ComplianceRule'}
         '404': {description: Rule pack not found}
+  /compliance/rulepack-assignments:
+    get:
+      summary: List selected rule packs per device group
+      x-stability: stable
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    group_id: {type: integer, format: int64}
+                    group_name: {type: string}
+                    packs:
+                      type: array
+                      items: {type: string}
+  /compliance/rulepack-assignments/{id}:
+    put:
+      summary: Set selected rule packs for a device group
+      x-stability: stable
+      parameters: [{$ref: '#/components/parameters/Id'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                packs:
+                  type: array
+                  items: {type: string}
+      responses:
+        '200': {description: OK}
+        '400': {description: Invalid input}
+        '404': {description: Device group not found}
 
   # -------------------------------------------------------------------------
   # Phase 5 — discovery
@@ -773,6 +811,7 @@ components:
           properties:
             id: {type: integer, format: int64}
             tenant_id: {type: integer, format: int64}
+            group_id: {type: integer, format: int64, nullable: true}
             created_at: {type: string, format: date-time}
     ComplianceFinding:
       type: object

@@ -60,8 +60,9 @@ Operational guidance:
 ## Current limitations
 
 - Project is still pre-stable; APIs and storage formats are not yet frozen.
-- NETCONF/RESTCONF/gNMI driver paths are scaffolded and need transport/security
-  hardening before production use.
+- NETCONF/RESTCONF/gNMI driver paths are now wired for both backup capture and
+  automation apply; continue validating vendor-specific model/path coverage
+  before broad production rollout.
 - SSH known-hosts verification is not yet enforced (trust-on-first-use); this
   is tracked as a follow-up hardening item.
 - Notification channel `config` is stored as JSON. For email channels, the

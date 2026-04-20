@@ -23,6 +23,7 @@ import (
 type Rule struct {
 	ID          int64  `json:"id"`
 	TenantID    int64  `json:"tenant_id"`
+	GroupID     *int64 `json:"group_id,omitempty"`
 	Name        string `json:"name"`
 	Kind        string `json:"kind"`
 	Pattern     string `json:"pattern"`
@@ -56,8 +57,8 @@ func (s *Service) CreateRule(ctx context.Context, r Rule) (Rule, error) {
 		return Rule{}, err
 	}
 	res, err := s.DB.ExecContext(ctx,
-		`INSERT INTO compliance_rules(tenant_id, name, kind, pattern, severity, description, created_at) VALUES(?, ?, ?, ?, ?, ?, ?)`,
-		r.TenantID, r.Name, r.Kind, r.Pattern, defaultSeverity(r.Severity), r.Description,
+		`INSERT INTO compliance_rules(tenant_id, group_id, name, kind, pattern, severity, description, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.TenantID, r.GroupID, r.Name, r.Kind, r.Pattern, defaultSeverity(r.Severity), r.Description,
 		time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
 		return Rule{}, err
@@ -76,35 +77,64 @@ func (s *Service) UpsertRule(ctx context.Context, r Rule) (Rule, error) {
 		return Rule{}, err
 	}
 	r.Severity = defaultSeverity(r.Severity)
+	var id int64
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.DB.ExecContext(ctx, `
-        INSERT INTO compliance_rules(tenant_id, name, kind, pattern, severity, description, created_at)
-        VALUES(?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(tenant_id, name) DO UPDATE SET
-            kind = excluded.kind,
-            pattern = excluded.pattern,
-            severity = excluded.severity,
-            description = excluded.description`,
-		r.TenantID, r.Name, r.Kind, r.Pattern, r.Severity, r.Description, now)
+	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return Rule{}, err
 	}
-	// Fetch back the upserted row to return the canonical ID.
-	var id int64
-	err = s.DB.QueryRowContext(ctx,
-		`SELECT id FROM compliance_rules WHERE tenant_id=? AND name=?`,
-		r.TenantID, r.Name).Scan(&id)
-	if err != nil {
+	defer func() { _ = tx.Rollback() }()
+
+	rowErr := selectRuleIDForScope(ctx, tx, r.TenantID, r.Name, r.GroupID, &id)
+	switch {
+	case rowErr == nil:
+		_, err = tx.ExecContext(ctx, `
+            UPDATE compliance_rules
+            SET kind=?, pattern=?, severity=?, description=?
+            WHERE id=?`,
+			r.Kind, r.Pattern, r.Severity, r.Description, id)
+		if err != nil {
+			return Rule{}, err
+		}
+	case errors.Is(rowErr, sql.ErrNoRows):
+		res, err := tx.ExecContext(ctx, `
+            INSERT INTO compliance_rules(tenant_id, group_id, name, kind, pattern, severity, description, created_at)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+			r.TenantID, r.GroupID, r.Name, r.Kind, r.Pattern, r.Severity, r.Description, now)
+		if err != nil {
+			return Rule{}, err
+		}
+		id, err = res.LastInsertId()
+		if err != nil {
+			return Rule{}, err
+		}
+	default:
+		return Rule{}, rowErr
+	}
+	if err := tx.Commit(); err != nil {
 		return Rule{}, err
 	}
 	r.ID = id
 	return r, nil
 }
 
+func selectRuleIDForScope(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, tenantID int64, name string, groupID *int64, id *int64) error {
+	if groupID == nil {
+		return q.QueryRowContext(ctx,
+			`SELECT id FROM compliance_rules WHERE tenant_id=? AND name=? AND group_id IS NULL`,
+			tenantID, name).Scan(id)
+	}
+	return q.QueryRowContext(ctx,
+		`SELECT id FROM compliance_rules WHERE tenant_id=? AND name=? AND group_id=?`,
+		tenantID, name, *groupID).Scan(id)
+}
+
 // ListRules returns all rules for a tenant.
 func (s *Service) ListRules(ctx context.Context, tenantID int64) ([]Rule, error) {
 	rows, err := s.DB.QueryContext(ctx,
-		`SELECT id, tenant_id, name, kind, pattern, severity, IFNULL(description,'') FROM compliance_rules WHERE tenant_id=? ORDER BY name`,
+		`SELECT id, tenant_id, group_id, name, kind, pattern, severity, IFNULL(description,'') FROM compliance_rules WHERE tenant_id=? ORDER BY name`,
 		tenantID)
 	if err != nil {
 		return nil, err
@@ -113,7 +143,7 @@ func (s *Service) ListRules(ctx context.Context, tenantID int64) ([]Rule, error)
 	var out []Rule
 	for rows.Next() {
 		var r Rule
-		if err := rows.Scan(&r.ID, &r.TenantID, &r.Name, &r.Kind, &r.Pattern, &r.Severity, &r.Description); err != nil {
+		if err := rows.Scan(&r.ID, &r.TenantID, &r.GroupID, &r.Name, &r.Kind, &r.Pattern, &r.Severity, &r.Description); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -184,7 +214,16 @@ func orderedContains(text string, want []string) bool {
 // upserts findings, and invokes OnTransition for any status change.
 // Returns the new findings.
 func (s *Service) EvaluateDevice(ctx context.Context, tenantID, deviceID int64, text string) ([]Finding, error) {
-	rules, err := s.ListRules(ctx, tenantID)
+	var deviceGroupID sql.NullInt64
+	if err := s.DB.QueryRowContext(ctx,
+		`SELECT group_id FROM devices WHERE tenant_id=? AND id=?`,
+		tenantID, deviceID).Scan(&deviceGroupID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, errors.New("compliance: device not found")
+		}
+		return nil, err
+	}
+	rules, err := s.listRulesForDevice(ctx, tenantID, deviceGroupID)
 	if err != nil {
 		return nil, err
 	}
@@ -209,6 +248,27 @@ func (s *Service) EvaluateDevice(ctx context.Context, tenantID, deviceID int64, 
 			s.OnTransition(ctx, tenantID, f, prev)
 		}
 		out = append(out, f)
+	}
+	if deviceGroupID.Valid {
+		if _, err := s.DB.ExecContext(ctx, `
+            DELETE FROM compliance_findings
+            WHERE tenant_id=? AND device_id=? AND rule_id NOT IN (
+                SELECT id FROM compliance_rules
+                WHERE tenant_id=? AND (group_id IS NULL OR group_id=?)
+            )`,
+			tenantID, deviceID, tenantID, deviceGroupID.Int64); err != nil {
+			return nil, err
+		}
+	} else {
+		if _, err := s.DB.ExecContext(ctx, `
+            DELETE FROM compliance_findings
+            WHERE tenant_id=? AND device_id=? AND rule_id NOT IN (
+                SELECT id FROM compliance_rules
+                WHERE tenant_id=? AND group_id IS NULL
+            )`,
+			tenantID, deviceID, tenantID); err != nil {
+			return nil, err
+		}
 	}
 	return out, nil
 }
@@ -261,4 +321,39 @@ func defaultSeverity(s string) string {
 		return s
 	}
 	return "medium"
+}
+
+func (s *Service) listRulesForDevice(ctx context.Context, tenantID int64, groupID sql.NullInt64) ([]Rule, error) {
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if groupID.Valid {
+		rows, err = s.DB.QueryContext(ctx, `
+            SELECT id, tenant_id, group_id, name, kind, pattern, severity, IFNULL(description,'')
+            FROM compliance_rules
+            WHERE tenant_id=? AND (group_id IS NULL OR group_id=?)
+            ORDER BY name`,
+			tenantID, groupID.Int64)
+	} else {
+		rows, err = s.DB.QueryContext(ctx, `
+            SELECT id, tenant_id, group_id, name, kind, pattern, severity, IFNULL(description,'')
+            FROM compliance_rules
+            WHERE tenant_id=? AND group_id IS NULL
+            ORDER BY name`,
+			tenantID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Rule
+	for rows.Next() {
+		var r Rule
+		if err := rows.Scan(&r.ID, &r.TenantID, &r.GroupID, &r.Name, &r.Kind, &r.Pattern, &r.Severity, &r.Description); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }

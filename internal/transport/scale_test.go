@@ -17,8 +17,12 @@ func (f fixedLargeGNMIGetter) Get(_ context.Context, _ *gpb.GetRequest, _ ...grp
 	return f.resp, nil
 }
 
+func (f fixedLargeGNMIGetter) Set(_ context.Context, _ *gpb.SetRequest, _ ...grpc.CallOption) (*gpb.SetResponse, error) {
+	return &gpb.SetResponse{}, nil
+}
+
 func TestGNMIJSONIETFMappingMemoryGrowthBounded(t *testing.T) {
-	sess := &gnmiSession{getter: fixedLargeGNMIGetter{resp: largeGNMIResponse()}}
+	sess := &gnmiSession{client: fixedLargeGNMIGetter{resp: largeGNMIResponse()}}
 
 	runtime.GC()
 	var before runtime.MemStats
@@ -49,7 +53,7 @@ func TestGNMIJSONIETFMappingMemoryGrowthBounded(t *testing.T) {
 }
 
 func BenchmarkGNMIJSONIETFMassiveStateCapture(b *testing.B) {
-	sess := &gnmiSession{getter: fixedLargeGNMIGetter{resp: largeGNMIResponse()}}
+	sess := &gnmiSession{client: fixedLargeGNMIGetter{resp: largeGNMIResponse()}}
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		if _, err := sess.Run(context.Background(), "get-config:running"); err != nil {

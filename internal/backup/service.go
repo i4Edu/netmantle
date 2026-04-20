@@ -6,6 +6,7 @@ package backup
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -334,6 +335,52 @@ func (s *Service) sessionFactoryForDriver(name string) SessionFactory {
 func missingSessionFactory(transportName, driverName string) SessionFactory {
 	return func(_ context.Context, _ devices.Device, _, _ string) (drivers.Session, func() error, error) {
 		return nil, nil, fmt.Errorf("backup: %s session factory is not configured for driver %q", transportName, driverName)
+	}
+}
+
+// ApplyRenderedConfig opens a driver-appropriate transport session and applies
+// the rendered configuration payload to the target device.
+func (s *Service) ApplyRenderedConfig(ctx context.Context, dev devices.Device, rendered string) (string, error) {
+	if dev.CredentialID == nil {
+		return "", errors.New("backup: device has no credential")
+	}
+	username, secret, err := s.Credentials.Reveal(ctx, dev.TenantID, *dev.CredentialID)
+	if err != nil {
+		return "", fmt.Errorf("backup: reveal credentials: %w", err)
+	}
+	actx := ctx
+	cancel := func() {}
+	if s.Timeout > 0 {
+		actx, cancel = context.WithTimeout(ctx, s.Timeout)
+	}
+	defer cancel()
+
+	factory := s.sessionFactoryForDriver(dev.Driver)
+	sess, closer, err := factory(actx, dev, username, secret)
+	if err != nil {
+		return "", fmt.Errorf("backup: session: %w", err)
+	}
+	defer func() { _ = closer() }()
+
+	cmd := applyCommandForDriver(dev.Driver, rendered)
+	out, err := sess.Run(actx, cmd)
+	if err != nil {
+		return "", fmt.Errorf("backup: apply: %w", err)
+	}
+	return out, nil
+}
+
+func applyCommandForDriver(driverName, rendered string) string {
+	enc := base64.StdEncoding.EncodeToString([]byte(rendered))
+	switch driverName {
+	case "cisco_netconf", "junos_netconf":
+		return "edit-config:running:" + enc
+	case "restconf":
+		return "edit-config:running:" + enc
+	case "gnmi":
+		return "edit-config:running:" + enc
+	default:
+		return rendered
 	}
 }
 

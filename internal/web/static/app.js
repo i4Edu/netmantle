@@ -726,6 +726,20 @@ function renderTwoPaneDiff(text) {
 views.compliance = async (root) => {
   root.appendChild(el('h2', {}, 'Compliance'));
 
+  const pickerGroup = el('select', { id: 'rulepack-group-select' });
+  const pickerPacks = el('div', { id: 'rulepack-pack-list', class: 'rulepack-picker-list' });
+  const pickerStatus = el('p', { class: 'muted', id: 'rulepack-picker-status' }, 'Loading rule-pack assignments…');
+  const pickerSave = el('button', { type: 'button', class: 'btn' }, 'Save group rule packs');
+  const pickerCard = el('div', { class: 'card' },
+    el('h3', {}, 'Rule-pack picker'),
+    el('p', { class: 'muted' }, 'Select built-in compliance rule packs per device group.'),
+    el('label', {}, 'Device group ', pickerGroup),
+    pickerPacks,
+    el('div', { class: 'actions' }, pickerSave),
+    pickerStatus,
+  );
+  root.appendChild(pickerCard);
+
   // Add-rule form
   const form = el('form', { id: 'add-rule-form' },
     el('label', {}, 'Name ', el('input', { name: 'name', required: true })),
@@ -752,6 +766,83 @@ views.compliance = async (root) => {
     el('h3', {}, 'Findings'),
     el('div', { id: 'findings-table' }, el('p', { class: 'muted' }, 'Loading…')));
   root.append(rulesCard, findingsCard);
+
+  const pickerState = {
+    groups: [],
+    packs: [],
+    assignments: new Map(),
+  };
+
+  const renderPickerPackList = () => {
+    pickerPacks.innerHTML = '';
+    const gid = Number(pickerGroup.value || 0);
+    if (!gid || !pickerState.packs.length) {
+      pickerPacks.appendChild(el('p', { class: 'muted' }, 'No packs available.'));
+      return;
+    }
+    const selected = new Set(pickerState.assignments.get(gid) || []);
+    for (const p of pickerState.packs) {
+      const id = `pack-${gid}-${p.name}`;
+      const cb = el('input', { type: 'checkbox', id, value: p.name });
+      cb.checked = selected.has(p.name);
+      pickerPacks.appendChild(el('label', { class: 'rulepack-option', for: id },
+        cb,
+        el('span', {},
+          `${p.name} `,
+          el('span', { class: 'muted' }, `(v${p.version}, ${p.rule_count} rules)`)),
+      ));
+    }
+  };
+
+  const loadPicker = async () => {
+    try {
+      const [groups, packs, assignments] = await Promise.all([
+        api('GET', '/device-groups'),
+        api('GET', '/compliance/rulepacks'),
+        api('GET', '/compliance/rulepack-assignments'),
+      ]);
+      pickerState.groups = groups || [];
+      pickerState.packs = packs || [];
+      pickerState.assignments = new Map((assignments || []).map((a) => [a.group_id, a.packs || []]));
+      pickerGroup.innerHTML = '';
+      if (!pickerState.groups.length) {
+        pickerGroup.appendChild(el('option', { value: '' }, 'No groups defined'));
+        pickerSave.disabled = true;
+        pickerStatus.textContent = 'Create a device group to use group-scoped rule packs.';
+        renderPickerPackList();
+        return;
+      }
+      pickerSave.disabled = false;
+      for (const g of pickerState.groups) {
+        pickerGroup.appendChild(el('option', { value: g.id }, g.name));
+      }
+      pickerStatus.textContent = 'Select packs for a group and save.';
+      renderPickerPackList();
+    } catch (e) {
+      pickerStatus.className = 'error';
+      pickerStatus.textContent = 'Rule-pack picker unavailable: ' + e.message;
+      pickerSave.disabled = true;
+    }
+  };
+
+  pickerGroup.addEventListener('change', renderPickerPackList);
+  pickerSave.addEventListener('click', async () => {
+    const gid = Number(pickerGroup.value || 0);
+    if (!gid) return;
+    const selected = $$('#rulepack-pack-list input[type="checkbox"]:checked').map((x) => x.value);
+    pickerSave.disabled = true;
+    try {
+      await api('PUT', `/compliance/rulepack-assignments/${gid}`, { packs: selected });
+      pickerState.assignments.set(gid, selected);
+      pickerStatus.className = 'muted';
+      pickerStatus.textContent = `Saved ${selected.length} pack(s) for group #${gid}.`;
+    } catch (e) {
+      pickerStatus.className = 'error';
+      pickerStatus.textContent = 'Failed to save: ' + e.message;
+    } finally {
+      pickerSave.disabled = false;
+    }
+  });
 
   const renderRules = async () => {
     const dst = $('#rules-table');
@@ -842,6 +933,7 @@ views.compliance = async (root) => {
     } catch (err) { alert('Failed: ' + err.message); }
   });
 
+  await loadPicker();
   await renderRules();
   await renderFindings();
 };

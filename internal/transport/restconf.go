@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -103,15 +104,22 @@ func restconfBaseURL(address string, defaultPort int) (string, error) {
 }
 
 func (s *restconfSession) Run(ctx context.Context, cmd string) (string, error) {
-	path, err := restconfPathFromCommand(cmd)
+	method, path, body, contentType, err := restconfRequestFromCommand(cmd)
 	if err != nil {
 		return "", err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.baseURL+path, nil)
+	var reqBody io.Reader
+	if method != http.MethodGet {
+		reqBody = strings.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, s.baseURL+path, reqBody)
 	if err != nil {
 		return "", fmt.Errorf("transport/restconf: build request: %w", err)
 	}
 	req.Header.Set("Accept", "application/yang-data+json, application/yang-data+xml, application/json, application/xml")
+	if method != http.MethodGet {
+		req.Header.Set("Content-Type", contentType)
+	}
 	if s.bearerToken != "" {
 		req.Header.Set("Authorization", "Bearer "+s.bearerToken)
 	} else if s.username != "" {
@@ -122,14 +130,30 @@ func (s *restconfSession) Run(ctx context.Context, cmd string) (string, error) {
 		return "", fmt.Errorf("transport/restconf: request: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("transport/restconf: read response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("transport/restconf: status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return "", fmt.Errorf("transport/restconf: status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
-	return strings.TrimSpace(string(body)), nil
+	return strings.TrimSpace(string(respBody)), nil
+}
+
+func restconfRequestFromCommand(cmd string) (method, path, body, contentType string, err error) {
+	c := strings.TrimSpace(cmd)
+	if strings.HasPrefix(c, "edit-config:") {
+		path, body, contentType, err = restconfWritePathAndBody(c)
+		if err != nil {
+			return "", "", "", "", err
+		}
+		return http.MethodPatch, path, body, contentType, nil
+	}
+	path, err = restconfPathFromCommand(c)
+	if err != nil {
+		return "", "", "", "", err
+	}
+	return http.MethodGet, path, "", "", nil
 }
 
 func restconfPathFromCommand(cmd string) (string, error) {
@@ -151,4 +175,35 @@ func restconfPathFromCommand(cmd string) (string, error) {
 		return p, nil
 	}
 	return "", fmt.Errorf("transport/restconf: unsupported command %q (use get-config[:running|candidate|<path>])", c)
+}
+
+func restconfWritePathAndBody(cmd string) (path, body, contentType string, err error) {
+	rest := strings.TrimPrefix(strings.TrimSpace(cmd), "edit-config:")
+	parts := strings.SplitN(rest, ":", 2)
+	if len(parts) != 2 {
+		return "", "", "", fmt.Errorf("transport/restconf: invalid edit-config command")
+	}
+	selector := strings.TrimSpace(parts[0])
+	payload, err := base64.StdEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", "", "", fmt.Errorf("transport/restconf: invalid base64 payload")
+	}
+	switch selector {
+	case "running":
+		path = "/data"
+	case "candidate":
+		path = "/data?content=candidate"
+	default:
+		if !strings.HasPrefix(selector, "/") {
+			selector = "/" + selector
+		}
+		path = selector
+	}
+	body = string(payload)
+	if strings.HasPrefix(strings.TrimSpace(body), "<") {
+		contentType = "application/yang-data+xml"
+	} else {
+		contentType = "application/yang-data+json"
+	}
+	return path, body, contentType, nil
 }
