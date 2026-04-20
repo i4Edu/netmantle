@@ -186,6 +186,10 @@ type sleepService struct {
 	delay time.Duration
 }
 
+type sleepServiceServer interface {
+	Sleep(ctx context.Context, in *emptypb.Empty) (*emptypb.Empty, error)
+}
+
 func (s sleepService) Sleep(ctx context.Context, _ *emptypb.Empty) (*emptypb.Empty, error) {
 	select {
 	case <-ctx.Done():
@@ -199,7 +203,7 @@ func registerSleepService(server *grpc.Server, delay time.Duration) {
 	svc := sleepService{delay: delay}
 	server.RegisterService(&grpc.ServiceDesc{
 		ServiceName: "chaos.Chaos",
-		HandlerType: (*sleepService)(nil),
+		HandlerType: (*sleepServiceServer)(nil),
 		Methods: []grpc.MethodDesc{{
 			MethodName: "Sleep",
 			Handler: func(srv any, ctx context.Context, dec func(any) error, _ grpc.UnaryServerInterceptor) (any, error) {
@@ -207,7 +211,7 @@ func registerSleepService(server *grpc.Server, delay time.Duration) {
 				if err := dec(&in); err != nil {
 					return nil, err
 				}
-				return srv.(sleepService).Sleep(ctx, &in)
+				return srv.(sleepServiceServer).Sleep(ctx, &in)
 			},
 		}},
 	}, svc)

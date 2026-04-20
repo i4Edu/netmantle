@@ -76,9 +76,24 @@ func runClaimScaleScenario(t tb, pollerCount, queueSize int) ([]int64, time.Dura
 		go func() {
 			defer wg.Done()
 			start := time.Now()
-			job, err := jobs.Claim(context.Background(), 1, id, []poller.JobType{poller.JobTypeBackup})
-			if err != nil {
+			var (
+				job poller.Job
+				err error
+			)
+			for attempt := 0; attempt < 500; attempt++ {
+				job, err = jobs.Claim(context.Background(), 1, id, []poller.JobType{poller.JobTypeBackup})
+				if err == nil {
+					break
+				}
+				if err == sql.ErrNoRows {
+					time.Sleep(5 * time.Millisecond)
+					continue
+				}
 				errCh <- fmt.Errorf("claim failed for poller %d: %w", id, err)
+				return
+			}
+			if err != nil {
+				errCh <- fmt.Errorf("claim retries exhausted for poller %d: %w", id, err)
 				return
 			}
 			elapsed := time.Since(start)

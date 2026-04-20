@@ -69,10 +69,10 @@ type PollerConfig struct {
 }
 
 type PollerGRPCConfig struct {
-	Address         string `yaml:"address"`
-	TLSCertFile     string `yaml:"tls_cert_file"`
-	TLSKeyFile      string `yaml:"tls_key_file"`
-	TLSClientCAFile string `yaml:"tls_client_ca_file"`
+	Address         string        `yaml:"address"`
+	TLSCertFile     string        `yaml:"tls_cert_file"`
+	TLSKeyFile      string        `yaml:"tls_key_file"`
+	TLSClientCAFile string        `yaml:"tls_client_ca_file"`
 	Timeout         time.Duration `yaml:"timeout"`
 }
 
