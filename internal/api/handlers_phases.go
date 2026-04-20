@@ -30,7 +30,11 @@ import (
 
 func (s *server) handleListChanges(w http.ResponseWriter, r *http.Request) {
 	u := userFromContext(r.Context())
-	out, err := s.Changes.List(r.Context(), u.TenantID, 100)
+	var deviceID int64
+	if v := r.URL.Query().Get("device_id"); v != "" {
+		deviceID, _ = strconv.ParseInt(v, 10, 64)
+	}
+	out, err := s.Changes.ListByDevice(r.Context(), u.TenantID, deviceID, 100)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

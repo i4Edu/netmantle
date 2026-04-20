@@ -82,10 +82,30 @@ func (s *Service) Record(ctx context.Context, tenantID, deviceID int64, artifact
 
 // List returns recent change events for a tenant (most recent first).
 func (s *Service) List(ctx context.Context, tenantID int64, limit int) ([]Event, error) {
+	return s.ListByDevice(ctx, tenantID, 0, limit)
+}
+
+// ListByDevice returns change events for a tenant, optionally filtered to one device.
+// deviceID=0 means all devices.
+func (s *Service) ListByDevice(ctx context.Context, tenantID, deviceID int64, limit int) ([]Event, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := s.DB.QueryContext(ctx, `
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if deviceID > 0 {
+		rows, err = s.DB.QueryContext(ctx, `
+        SELECT ce.id, ce.device_id, ce.artifact, IFNULL(ce.old_sha,''), ce.new_sha,
+               ce.added_lines, ce.removed_lines, ce.reviewed, ce.created_at
+        FROM change_events ce
+        JOIN devices d ON d.id = ce.device_id
+        WHERE d.tenant_id = ? AND ce.device_id = ?
+        ORDER BY ce.created_at DESC
+        LIMIT ?`, tenantID, deviceID, limit)
+	} else {
+		rows, err = s.DB.QueryContext(ctx, `
         SELECT ce.id, ce.device_id, ce.artifact, IFNULL(ce.old_sha,''), ce.new_sha,
                ce.added_lines, ce.removed_lines, ce.reviewed, ce.created_at
         FROM change_events ce
@@ -93,6 +113,7 @@ func (s *Service) List(ctx context.Context, tenantID int64, limit int) ([]Event,
         WHERE d.tenant_id = ?
         ORDER BY ce.created_at DESC
         LIMIT ?`, tenantID, limit)
+	}
 	if err != nil {
 		return nil, err
 	}

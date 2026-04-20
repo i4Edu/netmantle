@@ -701,23 +701,37 @@ async function renderSlideoverTab(dev, tab) {
   } else if (tab === 'diffs') {
     body.innerHTML = '';
     try {
-      const changes = await api('GET', `/devices/${dev.id}/changes`);
-      if (!changes || !changes.length) { body.innerHTML = '<p class="muted">No config changes recorded.</p>'; return; }
-      for (const c of changes.slice(0, 20)) {
-        const dt = c.detected_at ? relativeTime(new Date(c.detected_at)) : '—';
-        const card = el('div', { class: 'card', style: 'margin-bottom:10px;padding:10px 14px' },
-          el('div', { style: 'display:flex;justify-content:space-between;margin-bottom:6px;font-size:var(--font-size-xs)' },
-            el('span', { style: 'font-weight:600' }, dt),
-            el('code', {}, c.commit_sha ? c.commit_sha.slice(0, 8) : '—')));
-        if (c.diff_text) {
-          const pre = el('div', { style: 'max-height:200px;overflow-y:auto' });
-          const lines = c.diff_text.split('\n');
-          for (const line of lines.slice(0, 60)) {
-            const cls = line.startsWith('+') ? 'diff-add' : line.startsWith('-') ? 'diff-del' : line.startsWith('@@') ? 'diff-hunk' : 'diff-ctx';
-            pre.appendChild(el('div', { class: 'diff-line ' + cls }, escapeHTML(line)));
-          }
-          card.appendChild(pre);
-        }
+      const evts = await api('GET', `/changes?device_id=${dev.id}`);
+      if (!evts || !evts.length) { body.innerHTML = '<p class="muted">No config changes recorded yet. Run a backup to detect changes.</p>'; return; }
+      for (const c of evts.slice(0, 15)) {
+        const dt = c.created_at ? relativeTime(new Date(c.created_at)) : '—';
+        const addBadge = c.added > 0 ? el('span', { style: 'color:var(--status-ok);font-weight:600;font-size:0.7rem' }, `+${c.added}`) : null;
+        const delBadge = c.removed > 0 ? el('span', { style: 'color:var(--status-bad);font-weight:600;font-size:0.7rem;margin-left:6px' }, `-${c.removed}`) : null;
+        const card = el('div', { class: 'card', style: 'margin-bottom:10px;padding:10px 14px;cursor:pointer' });
+        const hdr = el('div', { style: 'display:flex;justify-content:space-between;align-items:center;font-size:var(--font-size-xs)' },
+          el('span', {}, el('strong', {}, dt), addBadge, delBadge),
+          el('code', { style: 'font-size:0.65rem' }, c.new_sha ? c.new_sha.slice(0, 8) : '—'));
+        const diffPre = el('div', { hidden: true, style: 'margin-top:8px;max-height:300px;overflow-y:auto' });
+        hdr.onclick = async () => {
+          if (!diffPre.hidden) { diffPre.hidden = true; return; }
+          diffPre.innerHTML = '<span class="muted">Loading diff…</span>';
+          diffPre.hidden = false;
+          try {
+            const diffText = await api('GET', `/changes/${c.id}/diff`);
+            diffPre.innerHTML = '';
+            if (!diffText || !diffText.trim()) {
+              diffPre.appendChild(el('p', { class: 'muted', style: 'font-size:var(--font-size-xs)' }, 'No diff available.'));
+              return;
+            }
+            for (const line of diffText.split('\n').slice(0, 200)) {
+              const cls = line.startsWith('+') && !line.startsWith('+++') ? 'diff-add'
+                : line.startsWith('-') && !line.startsWith('---') ? 'diff-del'
+                : line.startsWith('@@') ? 'diff-hunk' : 'diff-ctx';
+              diffPre.appendChild(el('div', { class: 'diff-line ' + cls }, escapeHTML(line)));
+            }
+          } catch (e) { diffPre.innerHTML = '<p class="error">' + escapeHTML(e.message) + '</p>'; }
+        };
+        card.append(hdr, diffPre);
         body.appendChild(card);
       }
     } catch (e) { body.innerHTML = '<p class="error">' + escapeHTML(e.message) + '</p>'; }
