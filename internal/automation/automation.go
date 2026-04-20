@@ -340,7 +340,16 @@ func (s *Service) recordHighPriorityRollbackScaffold(ctx context.Context, tenant
 	if s.Audit == nil {
 		return
 	}
-	detail := fmt.Sprintf("priority=high rollback=scaffold status=manual_required error=%s", sanitizeAuditError(applyErrMsg))
+	detailJSON, err := json.Marshal(map[string]string{
+		"priority": "high",
+		"rollback": "scaffold",
+		"status":   "manual_required",
+		"error":    sanitizeAuditError(applyErrMsg),
+	})
+	detail := string(detailJSON)
+	if err != nil {
+		detail = `{"priority":"high","rollback":"scaffold","status":"manual_required","error":"marshal_failed"}`
+	}
 	s.Audit.Record(ctx, tenantID, 0, audit.SourceSystem, "automation.apply.rollback_scaffold", fmt.Sprintf("device:%d", d.ID), detail)
 }
 

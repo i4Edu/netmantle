@@ -219,13 +219,13 @@ func TestRESTCONFChaos(t *testing.T) {
 	})
 }
 
-type delayedWireJobs struct {
+type delayedJobService struct {
 	delegate    *poller.JobService
 	claimDelay  time.Duration
 	reportDelay time.Duration
 }
 
-func (dw delayedWireJobs) Claim(ctx context.Context, tenantID, pollerID int64, supportedTypes []poller.JobType) (poller.Job, error) {
+func (dw delayedJobService) Claim(ctx context.Context, tenantID, pollerID int64, supportedTypes []poller.JobType) (poller.Job, error) {
 	if dw.claimDelay > 0 {
 		select {
 		case <-ctx.Done():
@@ -236,7 +236,7 @@ func (dw delayedWireJobs) Claim(ctx context.Context, tenantID, pollerID int64, s
 	return dw.delegate.Claim(ctx, tenantID, pollerID, supportedTypes)
 }
 
-func (dw delayedWireJobs) CompleteClaimedBy(ctx context.Context, tenantID, pollerID, jobID int64, success bool, resultJSON, errMsg string) error {
+func (dw delayedJobService) CompleteClaimedBy(ctx context.Context, tenantID, pollerID, jobID int64, success bool, resultJSON, errMsg string) error {
 	if dw.reportDelay > 0 {
 		select {
 		case <-ctx.Done():
@@ -307,7 +307,7 @@ func TestWireChaosNetworkFlapDoesNotDoubleClaim(t *testing.T) {
 func TestWireChaosDatabaseLatencyRespectsContextTimeout(t *testing.T) {
 	db, _, pollers, jobs := newWireChaosHarness(t)
 	defer db.Close()
-	wire := poller.NewWireService(pollers, delayedWireJobs{
+	wire := poller.NewWireService(pollers, delayedJobService{
 		delegate:    jobs,
 		claimDelay:  200 * time.Millisecond,
 		reportDelay: 200 * time.Millisecond,
