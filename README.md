@@ -74,13 +74,13 @@ items are usable today; *Follow‑up* items are tracked but not yet hardened.
 | 1 | MVP backup | Inventory CRUD, SSH transport, builtin CLI drivers, git‑backed config store, backup runs, embedded UI | Additional vendor coverage and transport hardening |
 | 2 | Change management & notifications | Diff engine, change events, webhook / Slack / email channels with rules | Policy tuning and richer routing/escalation |
 | 3 | Auditing & search | SQLite FTS5 full‑text search, saved searches, CSV export | Advanced indexing & large‑scale tuning |
-| 4 | Configuration compliance | Rules / rulesets / findings with transition notifications | Expanded rule packs, richer remediation |
+| 4 | Configuration compliance | Rules / rulesets / findings with transition notifications, **ISP/Cisco/MikroTik baseline rule packs** | Broader rule pack library and richer remediation workflows |
 | 5 | Discovery & NMS sync | TCP / banner scan, NetBox JSON import | SNMP enrichment, LibreNMS / Zabbix sync |
 | 6 | Push / pull automation | Push‑job CRUD, template rendering, preview, grouped results, **per-driver `Apply()` live execution via transport routing** | — |
-| 7 | In‑app CLI & distributed pollers | Web terminal with transcript/audit, poller registration + heartbeat, mTLS gRPC listener shell | Full poller RPC method registration and remote execution hardening |
+| 7 | In‑app CLI & distributed pollers | Web terminal transcript/audit, poller registration + heartbeat, poller job queue, gRPC wire-protocol contract, wire-level poller core adapter, dedicated gRPC+mTLS listener shell | Full poller RPC registration + remote execution hardening |
 | 8 | Runtime state auditing & compliance | Probe framework + runtime checks | Broader probe library and policy packs |
-| 9 | Multi‑tenancy & HA | Tenant CRUD, quotas, leader‑elected scheduler, Helm chart | Automated HA / failover validation, scale testing |
-| 10 | Hardening + modern transports + topology + GitOps mirror | NETCONF helpers, RESTCONF + gNMI native backup wiring, LLDP/CDP topology API + graph-canvas renderer, GitOps mirror, signed release + SBOM workflow | Additional transport hardening |
+| 9 | Multi‑tenancy & HA | Tenant CRUD, quotas, leader‑elected scheduler, Helm chart, **extended HA failover tests** (split-brain prevention, leader handoff timeliness, rapid leadership-change stability) | Automated scale testing and HA chaos framework |
+| 10 | Hardening + modern transports + topology + GitOps mirror | NETCONF helpers, LLDP/CDP topology API + UI canvas renderer, GitOps mirror, signed release + SBOM workflow, hardened NETCONF-over-SSH drivers, RESTCONF + gNMI native transport wiring, SSH known-hosts persistence, webhook/Slack URL sealing, topology API versioning | Full poller RPC registration/hardening |
 
 ## Architecture at a glance
 
@@ -201,7 +201,7 @@ same PR.
 
 | View | Image |
 |------|-------|
-| Dashboard / device inventory | ![Dashboard placeholder](docs/images/dashboard.png) |
+| Dashboard / device inventory | ![Dashboard from fresh local install](docs/images/dashboard.png) |
 | Device detail with backup history & diff | ![Device detail placeholder](docs/images/device-detail.png) |
 | Compliance findings | ![Compliance placeholder](docs/images/compliance.png) |
 | In‑app CLI / web terminal | ![Terminal placeholder](docs/images/terminal.png) |
