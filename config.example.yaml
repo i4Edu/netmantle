@@ -13,9 +13,10 @@ database:
   driver: "sqlite"
   # SQLite DSN. Relative paths are resolved against the working directory.
   dsn: "data/netmantle.db"
-  # DB pool tuning for high-scale environments.
-  max_open_conns: 64
-  max_idle_conns: 32
+  # Connection pool tuning. For sqlite, keep this at 1/1 to avoid lock contention.
+  max_open_conns: 1
+  max_idle_conns: 1
+  # Lifetime may be configured, but sqlite deployments should remain single-connection.
   conn_max_lifetime: "30m"
 
 storage:

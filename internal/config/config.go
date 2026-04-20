@@ -87,8 +87,8 @@ func Default() Config {
 		Database: DatabaseConfig{
 			Driver:          "sqlite",
 			DSN:             "data/netmantle.db",
-			MaxOpenConns:    64,
-			MaxIdleConns:    32,
+			MaxOpenConns:    1,
+			MaxIdleConns:    1,
 			ConnMaxLifetime: 30 * time.Minute,
 		},
 		Storage: StorageConfig{

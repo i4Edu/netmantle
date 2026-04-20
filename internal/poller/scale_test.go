@@ -44,10 +44,13 @@ type tb interface {
 
 func runClaimScaleScenario(t tb, pollerCount, queueSize int) ([]int64, time.Duration) {
 	t.Helper()
-	db, err := storage.Open("sqlite", ":memory:")
+	dsn := fmt.Sprintf("file:poller-scale-%d?mode=memory&cache=shared", time.Now().UnixNano())
+	db, err := storage.Open("sqlite", dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
+	db.SetMaxOpenConns(32)
+	db.SetMaxIdleConns(16)
 	defer db.Close()
 	if err := storage.Migrate(context.Background(), db); err != nil {
 		t.Fatal(err)

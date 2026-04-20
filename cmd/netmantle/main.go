@@ -100,8 +100,15 @@ func runServe(argv []string) error {
 		return err
 	}
 	defer db.Close()
-	db.SetMaxOpenConns(cfg.Database.MaxOpenConns)
-	db.SetMaxIdleConns(cfg.Database.MaxIdleConns)
+	if cfg.Database.Driver == "sqlite" {
+		// Preserve storage.Open's SQLite guardrail: a single-connection pool
+		// reduces lock contention and SQLITE_BUSY errors in sqlite-first builds.
+		db.SetMaxOpenConns(1)
+		db.SetMaxIdleConns(1)
+	} else {
+		db.SetMaxOpenConns(cfg.Database.MaxOpenConns)
+		db.SetMaxIdleConns(cfg.Database.MaxIdleConns)
+	}
 	db.SetConnMaxLifetime(cfg.Database.ConnMaxLifetime)
 
 	mctx, mcancel := context.WithTimeout(context.Background(), 30*time.Second)

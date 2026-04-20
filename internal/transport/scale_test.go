@@ -18,7 +18,6 @@ func (f fixedLargeGNMIGetter) Get(_ context.Context, _ *gpb.GetRequest, _ ...grp
 }
 
 func TestGNMIJSONIETFMappingMemoryGrowthBounded(t *testing.T) {
-	t.Parallel()
 	sess := &gnmiSession{getter: fixedLargeGNMIGetter{resp: largeGNMIResponse()}}
 
 	runtime.GC()
