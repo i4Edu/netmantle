@@ -852,6 +852,12 @@ pre.config {
 .inv-toolbar input[type=search] { flex:1; min-width:180px; padding:5px 10px; border:1px solid var(--border-default); border-radius:var(--radius-sm); font-size:var(--font-size-sm); background:var(--surface-card); color:var(--text-default); }
 .inv-toolbar select { padding:5px 10px; border:1px solid var(--border-default); border-radius:var(--radius-sm); font-size:var(--font-size-sm); background:var(--surface-card); color:var(--text-default); }
 .table-wrapper { overflow-y:auto; max-height:calc(100vh - 200px); border:1px solid var(--border-default); border-radius:var(--radius-md); background:var(--surface-card); }
+.inv-stats { font-size:var(--font-size-xs); color:var(--text-muted); padding:6px 0; display:flex; align-items:center; gap:4px; }
+.device-table input[type=checkbox] { width:auto; margin:0; cursor:pointer; }
+.status-dot { display:inline-block; width:10px; height:10px; border-radius:50%; background:var(--border-default); }
+.status-dot.ok { background:var(--status-ok); }
+.status-dot.bad { background:var(--status-bad); }
+.status-dot.warn { background:var(--status-warn); }
 
 /* ===== Contextual sidebar ===== */
 .ctx-sidebar {
@@ -866,17 +872,42 @@ pre.config {
 .ctx-sidebar .config-pre { font-family:var(--font-config, var(--font-mono)); font-size:0.7rem; background:var(--surface-sunken); border-radius:var(--radius-sm); padding:8px; overflow:auto; max-height:200px; white-space:pre; }
 
 /* ===== Diff viewer improvements ===== */
-.diff-line { font-family:var(--font-config, var(--font-mono)); font-size:0.8rem; white-space:pre; }
+.diff-line { font-family:var(--font-config, var(--font-mono)); font-size:0.75rem; white-space:pre; padding:1px 8px; line-height:1.5; }
 .diff-add { background:#e6ffed; color:#1a7f37; }
 .diff-del { background:#ffebe9; color:#b91c1c; }
 .diff-hunk { background:#e8f4fd; color:#0550ae; font-style:italic; }
 .diff-ctx { color:var(--text-muted); }
-.diff-add::before { content:'+'; display:inline-block; width:16px; }
-.diff-del::before { content:'-'; display:inline-block; width:16px; }
+.diff-add::before { content:'+'; display:inline-block; width:16px; color:#1a7f37; font-weight:700; }
+.diff-del::before { content:'-'; display:inline-block; width:16px; color:#b91c1c; font-weight:700; }
 .diff-ctx::before { content:' '; display:inline-block; width:16px; }
 .diff-hunk::before { content:'@'; display:inline-block; width:16px; }
+.diff-muted { opacity:0.35; text-decoration:line-through; font-size:0.7rem; }
+.diff-highlight { outline:2px solid var(--accent); outline-offset:-1px; border-radius:2px; }
 [data-theme='dark'] .diff-add { background:#0d2c18; color:#3fb950; }
 [data-theme='dark'] .diff-del { background:#2c1015; color:#f87171; }
+
+/* Diff mode toggle buttons */
+.diff-mode-btn { padding:4px 12px; border:none; background:var(--surface-card); color:var(--text-muted); font-size:var(--font-size-xs); cursor:pointer; font-weight:500; }
+.diff-mode-btn.active { background:var(--accent); color:#fff; }
+.diff-mode-btn:hover:not(.active) { background:var(--surface-sunken); }
+
+/* Diff navigation bar */
+.diff-nav { display:flex; align-items:center; gap:8px; margin-bottom:8px; padding:6px 10px; background:var(--surface-sunken); border-radius:var(--radius-sm); }
+.diff-nav-info { font-family:var(--font-mono); }
+
+/* Side-by-side diff table */
+.diff-sbs-table { width:100%; border-collapse:collapse; font-family:var(--font-config,var(--font-mono)); font-size:0.72rem; table-layout:fixed; }
+.diff-sbs-table td { padding:1px 6px; white-space:pre-wrap; word-break:break-all; vertical-align:top; border-right:1px solid var(--border-default); width:50%; }
+.diff-sbs-table td:last-child { border-right:none; }
+.diff-sbs-table .diff-hunk-row td { background:var(--surface-sunken); font-style:italic; color:var(--text-muted); text-align:center; }
+.diff-sbs-table td.diff-add { background:#e6ffed; color:#1a7f37; }
+.diff-sbs-table td.diff-del { background:#ffebe9; color:#b91c1c; }
+.diff-sbs-table td.diff-muted { opacity:0.35; }
+
+/* Pagination bar */
+.pagination-bar { display:flex; align-items:center; justify-content:center; gap:12px; padding:10px; border-top:1px solid var(--border-default); }
+.pagination-bar .pg-btn { font-size:var(--font-size-xs); }
+.pagination-bar .pg-info { font-size:var(--font-size-xs); color:var(--text-muted); }
 
 /* ===== Automation wizard ===== */
 .wizard-steps { display:flex; gap:0; margin-bottom:var(--space-4); border-bottom:2px solid var(--border-default); }

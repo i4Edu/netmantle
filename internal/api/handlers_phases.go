@@ -1127,8 +1127,11 @@ func (s *server) handleListConfigVersions(w http.ResponseWriter, r *http.Request
 }
 
 type exportConfigsInput struct {
-	DeviceIDs []int64 `json:"device_ids"`
-	Format    string  `json:"format"`
+	DeviceIDs   []int64 `json:"device_ids"`
+	Format      string  `json:"format"`
+	FromDate    string  `json:"from_date"`
+	ToDate      string  `json:"to_date"`
+	AllVersions bool    `json:"all_versions"`
 }
 
 func (s *server) handleExportConfigs(w http.ResponseWriter, r *http.Request) {
@@ -1143,6 +1146,12 @@ func (s *server) handleExportConfigs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Determine artifact name based on format.
+	artifact := "running-config"
+	if in.Format == "binary" {
+		artifact = "binary-backup"
+	}
+
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", "attachment; filename=configs.zip")
 	zw := zip.NewWriter(w)
@@ -1153,15 +1162,77 @@ func (s *server) handleExportConfigs(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		body, _, err := s.Backup.LatestVersion(r.Context(), u.TenantID, devID, "")
-		if err != nil {
-			continue
+
+		if in.AllVersions && s.ConfigStore != nil {
+			// Export all versions within date range for this device.
+			versions, err := s.ConfigStore.ListVersions(u.TenantID, devID, 200)
+			if err != nil {
+				continue
+			}
+			for _, v := range versions {
+				// Date range filtering.
+				if in.FromDate != "" {
+					if from, err := time.Parse("2006-01-02", in.FromDate); err == nil {
+						if v.Date.Before(from) {
+							continue
+						}
+					}
+				}
+				if in.ToDate != "" {
+					if to, err := time.Parse("2006-01-02", in.ToDate); err == nil {
+						if v.Date.After(to.Add(24 * time.Hour)) {
+							continue
+						}
+					}
+				}
+				body, err := s.Backup.ReadVersion(r.Context(), u.TenantID, devID, artifact, v.SHA)
+				if err != nil {
+					// Try falling back to running-config if binary not available.
+					if artifact == "binary-backup" {
+						body, err = s.Backup.ReadVersion(r.Context(), u.TenantID, devID, "running-config", v.SHA)
+						if err != nil {
+							continue
+						}
+					} else {
+						continue
+					}
+				}
+				dateStr := v.Date.Format("2006-01-02_150405")
+				ext := ".cfg"
+				if in.Format == "binary" {
+					ext = ".backup"
+				}
+				fname := fmt.Sprintf("%s/%s_%s%s", dev.Hostname, dateStr, v.SHA[:8], ext)
+				fw, err := zw.Create(fname)
+				if err != nil {
+					continue
+				}
+				_, _ = fw.Write(body)
+			}
+		} else {
+			// Export latest version only.
+			body, _, err := s.Backup.LatestVersion(r.Context(), u.TenantID, devID, artifact)
+			if err != nil {
+				// Fallback: try running-config if binary not available.
+				if artifact == "binary-backup" {
+					body, _, err = s.Backup.LatestVersion(r.Context(), u.TenantID, devID, "running-config")
+					if err != nil {
+						continue
+					}
+				} else {
+					continue
+				}
+			}
+			ext := ".cfg"
+			if in.Format == "binary" && artifact == "binary-backup" {
+				ext = ".backup"
+			}
+			fw, err := zw.Create(dev.Hostname + ext)
+			if err != nil {
+				continue
+			}
+			_, _ = fw.Write(body)
 		}
-		fw, err := zw.Create(dev.Hostname + ".cfg")
-		if err != nil {
-			continue
-		}
-		_, _ = fw.Write(body)
 	}
 }
 

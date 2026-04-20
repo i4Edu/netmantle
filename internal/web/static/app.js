@@ -188,15 +188,37 @@ const views = {};
 let currentDeviceId = null;
 
 views.inventory = (root) => {
+  // Page header with actions
+  root.appendChild(el('div', { class: 'page-header' },
+    el('div', { class: 'page-header-left' },
+      el('div', { class: 'page-header-breadcrumb' }, 'Core Operations'),
+      el('div', { class: 'page-header-title' }, 'Devices')),
+    el('div', { class: 'page-header-actions' },
+      el('button', { class: 'btn', id: 'add-dev-toggle' }, '+ Add device'),
+      el('button', { class: 'btn ghost', id: 'add-cred-toggle' }, '+ Credential'),
+      el('button', { class: 'btn ghost', id: 'bulk-backup-btn', hidden: true }, '⚡ Backup selected'),
+      el('button', { class: 'btn ghost', id: 'bulk-export-btn', hidden: true }, '📥 Export selected'))));
+
   const toolbar = el('div', { class: 'inv-toolbar' },
-    el('input', { type: 'search', id: 'dev-search', placeholder: 'Filter devices…' }),
+    el('input', { type: 'search', id: 'dev-search', placeholder: 'Search: hostname, IP, or vendor:mikrotik status:fail tag:core …' }),
     el('select', { id: 'dev-group-filter' },
       el('option', { value: '' }, 'All drivers')),
-    el('button', { class: 'btn', id: 'add-dev-toggle' }, '+ Add device'),
-    el('button', { class: 'btn', id: 'add-cred-toggle' }, '+ Add credential'),
+    el('select', { id: 'dev-tag-filter' },
+      el('option', { value: '' }, 'All tags')),
+    el('select', { id: 'dev-status-filter' },
+      el('option', { value: '' }, 'All status'),
+      el('option', { value: 'ok' }, '🟢 Healthy'),
+      el('option', { value: 'fail' }, '🔴 Failed'),
+      el('option', { value: 'never' }, '⚪ Never backed up')),
+    el('select', { id: 'dev-pagesize' },
+      el('option', { value: '50' }, '50/page'),
+      el('option', { value: '100' }, '100/page'),
+      el('option', { value: '0' }, 'All')),
   );
 
-  let allDevices = [], allFindings = [], ruleCount = 0, lastBackups = {};
+  let allDevices = [], allFindings = [], ruleCount = 0, lastBackups = {}, backupStatus = {};
+  let selectedIds = new Set();
+  let currentPage = 0;
 
   const addDevSection = el('div', { id: 'add-dev-section', hidden: true, class: 'card', style: 'margin-bottom:12px' },
     buildAddDeviceForm(() => loadAll()));
@@ -204,25 +226,88 @@ views.inventory = (root) => {
     buildAddCredentialForm());
 
   const tableWrap = el('div', { class: 'table-wrapper' });
-  const statsBar = el('div', { style: 'font-size:var(--font-size-xs);color:var(--text-muted);padding:4px 0;', id: 'dev-stats' });
+  const statsBar = el('div', { class: 'inv-stats', id: 'dev-stats' });
 
-  root.append(el('h2', {}, 'Inventory'),
-    toolbar, addDevSection, addCredSection, statsBar, tableWrap);
+  root.append(toolbar, addDevSection, addCredSection, statsBar, tableWrap);
 
-  toolbar.querySelector('#add-dev-toggle').onclick = () => {
+  root.querySelector('#add-dev-toggle').onclick = () => {
     addDevSection.hidden = !addDevSection.hidden;
     loadAux();
   };
-  toolbar.querySelector('#add-cred-toggle').onclick = () => {
+  root.querySelector('#add-cred-toggle').onclick = () => {
     addCredSection.hidden = !addCredSection.hidden;
   };
+  root.querySelector('#bulk-backup-btn').onclick = async () => {
+    if (!selectedIds.size) return;
+    for (const id of selectedIds) {
+      try { await api('POST', `/devices/${id}/backup`); } catch (_) {}
+    }
+    selectedIds.clear();
+    updateBulkBar();
+    await loadAll();
+  };
+  root.querySelector('#bulk-export-btn').onclick = () => {
+    openExportModal([...selectedIds]);
+  };
+
+  function updateBulkBar() {
+    const show = selectedIds.size > 0;
+    root.querySelector('#bulk-backup-btn').hidden = !show;
+    root.querySelector('#bulk-export-btn').hidden = !show;
+    if (show) {
+      root.querySelector('#bulk-backup-btn').textContent = `⚡ Backup ${selectedIds.size} selected`;
+      root.querySelector('#bulk-export-btn').textContent = `📥 Export ${selectedIds.size} selected`;
+    }
+  }
+
+  function parseSearch(q) {
+    const filters = {};
+    const words = [];
+    for (const part of q.split(/\s+/)) {
+      const m = part.match(/^(\w+):(.+)$/);
+      if (m) filters[m[1].toLowerCase()] = m[2].toLowerCase();
+      else if (part) words.push(part.toLowerCase());
+    }
+    return { filters, text: words.join(' ') };
+  }
 
   async function renderTable() {
-    const q = ($('#dev-search') || { value: '' }).value.toLowerCase();
+    const rawQ = ($('#dev-search') || { value: '' }).value;
     const grp = ($('#dev-group-filter') || { value: '' }).value;
-    let devs = allDevices.filter(d =>
-      (!q || d.hostname.toLowerCase().includes(q) || d.driver.includes(q) || d.address.includes(q)) &&
-      (!grp || d.driver === grp));
+    const tagFilter = ($('#dev-tag-filter') || { value: '' }).value;
+    const statusFilter = ($('#dev-status-filter') || { value: '' }).value;
+    const pageSize = Number(($('#dev-pagesize') || { value: '50' }).value);
+    const { filters, text } = parseSearch(rawQ);
+
+    let devs = allDevices.filter(d => {
+      if (grp && d.driver !== grp) return false;
+      if (tagFilter && !(d.tags || []).includes(tagFilter) && d.group_name !== tagFilter) return false;
+      if (filters.vendor && !d.driver.toLowerCase().includes(filters.vendor)) return false;
+      if (filters.driver && !d.driver.toLowerCase().includes(filters.driver)) return false;
+      if (filters.ip && !d.address.includes(filters.ip)) return false;
+      if (filters.tag && !(d.tags || []).some(t => t.toLowerCase().includes(filters.tag)) && !(d.group_name || '').toLowerCase().includes(filters.tag)) return false;
+      if (filters.status) {
+        const st = backupStatus[d.id] || 'never';
+        if (filters.status !== st) return false;
+      }
+      if (statusFilter) {
+        const st = backupStatus[d.id] || 'never';
+        if (statusFilter !== st) return false;
+      }
+      if (text && !(d.hostname.toLowerCase().includes(text) ||
+                    d.driver.toLowerCase().includes(text) ||
+                    d.address.includes(text))) return false;
+      return true;
+    });
+
+    const totalFiltered = devs.length;
+
+    // Pagination
+    if (pageSize > 0) {
+      const maxPage = Math.max(0, Math.ceil(devs.length / pageSize) - 1);
+      if (currentPage > maxPage) currentPage = maxPage;
+      devs = devs.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+    }
 
     const failByDev = {}, passByDev = {};
     for (const f of allFindings) {
@@ -231,15 +316,25 @@ views.inventory = (root) => {
     }
 
     const tbl = el('table', { class: 'device-table' });
+    const selectAllCb = el('input', { type: 'checkbox', id: 'select-all-cb' });
+    selectAllCb.onchange = () => {
+      const cbs = tableWrap.querySelectorAll('input.row-cb');
+      cbs.forEach(cb => { cb.checked = selectAllCb.checked; });
+      selectedIds.clear();
+      if (selectAllCb.checked) devs.forEach(d => selectedIds.add(d.id));
+      updateBulkBar();
+    };
+
     const thead = el('thead', {},
       el('tr', {},
-        el('th', {}, 'Status'),
+        el('th', { style: 'width:32px' }, selectAllCb),
+        el('th', { style: 'width:36px' }, ''),
         el('th', {}, 'Hostname'),
         el('th', {}, 'Driver'),
         el('th', {}, 'Address'),
         el('th', {}, 'Last Backup'),
         el('th', {}, 'Compliance'),
-        el('th', {}, 'Actions'),
+        el('th', { style: 'width:130px' }, 'Actions'),
       ));
     const tbody = el('tbody');
 
@@ -248,32 +343,58 @@ views.inventory = (root) => {
       const passes = passByDev[d.id] || 0;
       const evaluated = fails + passes;
       const score = evaluated > 0 ? Math.round((passes * 100) / evaluated) : null;
-      const { cls, label: statusLabel } = complianceStatus(fails, ruleCount > 0);
       const lb = lastBackups[d.id] || '—';
+      const st = backupStatus[d.id] || 'never';
+      const dotCls = st === 'ok' ? 'status-dot ok pulse' : st === 'fail' ? 'status-dot bad' : 'status-dot';
+
+      const cb = el('input', { type: 'checkbox', class: 'row-cb', value: String(d.id) });
+      cb.checked = selectedIds.has(d.id);
+      cb.onchange = (e) => {
+        e.stopPropagation();
+        if (cb.checked) selectedIds.add(d.id); else selectedIds.delete(d.id);
+        updateBulkBar();
+      };
 
       const quickActions = el('div', { class: 'quick-actions' },
-        el('button', { class: 'qa-btn', title: 'Backup now' }, '⚡ Backup'),
-        el('button', { class: 'qa-btn', title: 'View history' }, '📋 History'),
+        el('button', { class: 'qa-btn', title: 'Backup now' }, '⚡'),
+        el('button', { class: 'qa-btn', title: 'SSH Terminal' }, '🖥'),
+        el('button', { class: 'qa-btn', title: 'View history' }, '📋'),
+        el('button', { class: 'qa-btn', title: 'Delete' }, '🗑'),
       );
       quickActions.children[0].onclick = async (e) => {
         e.stopPropagation();
         quickActions.children[0].textContent = '…';
         try { await api('POST', `/devices/${d.id}/backup`); await loadAll(); }
         catch (err) { alert('Backup failed: ' + err.message); }
-        quickActions.children[0].textContent = '⚡ Backup';
+        quickActions.children[0].textContent = '⚡';
       };
       quickActions.children[1].onclick = (e) => {
         e.stopPropagation();
+        // Open SSH terminal in slide-over log tab
         openSlideOver(d);
+        setTimeout(() => {
+          const logTab = document.querySelector('.slideover-tab[data-tab="log"]');
+          if (logTab) logTab.click();
+        }, 100);
+      };
+      quickActions.children[2].onclick = (e) => { e.stopPropagation(); openSlideOver(d); };
+      quickActions.children[3].onclick = async (e) => {
+        e.stopPropagation();
+        if (!confirm(`Delete ${d.hostname}?`)) return;
+        try { await api('DELETE', `/devices/${d.id}`); await loadAll(); } catch (err) { alert(err.message); }
       };
 
+      const compBadge = score == null ? el('span', { class: 'muted', style: 'font-size:0.7rem' }, '—')
+        : el('span', { class: 'badge ' + (score >= 90 ? 'ok' : score >= 60 ? 'warn' : 'bad'), style: 'font-size:0.65rem' }, score + '%');
+
       const tr = el('tr', { 'data-id': d.id },
-        el('td', {}, el('span', { class: 'badge ' + cls }, statusLabel)),
-        el('td', {}, el('strong', {}, escapeHTML(d.hostname))),
-        el('td', {}, el('code', { style: 'font-size:0.75rem' }, escapeHTML(d.driver))),
-        el('td', {}, `${escapeHTML(d.address)}:${d.port}`),
-        el('td', {}, lb),
-        el('td', {}, score == null ? '—' : score + '%'),
+        el('td', { onclick: (e) => e.stopPropagation() }, cb),
+        el('td', {}, el('span', { class: dotCls })),
+        el('td', {}, el('strong', { style: 'font-size:0.8rem' }, escapeHTML(d.hostname))),
+        el('td', {}, el('code', { style: 'font-size:0.7rem;color:var(--text-muted)' }, escapeHTML(d.driver))),
+        el('td', { style: 'font-family:var(--font-mono);font-size:0.75rem' }, `${escapeHTML(d.address)}:${d.port}`),
+        el('td', { style: 'font-size:0.75rem' }, lb),
+        el('td', {}, compBadge),
         el('td', {}, quickActions),
       );
       tr.onclick = () => openSlideOver(d);
@@ -283,8 +404,30 @@ views.inventory = (root) => {
     tableWrap.innerHTML = '';
     tableWrap.appendChild(tbl);
 
+    // Pagination controls
+    if (pageSize > 0 && totalFiltered > pageSize) {
+      const maxPage = Math.ceil(totalFiltered / pageSize) - 1;
+      const pager = el('div', { class: 'pagination-bar' },
+        el('button', { class: 'btn ghost pg-btn', disabled: currentPage === 0 }, '← Prev'),
+        el('span', { class: 'pg-info' }, `Page ${currentPage + 1} of ${maxPage + 1} (${totalFiltered} devices)`),
+        el('button', { class: 'btn ghost pg-btn', disabled: currentPage >= maxPage }, 'Next →'));
+      pager.children[0].onclick = () => { if (currentPage > 0) { currentPage--; renderTable(); } };
+      pager.children[2].onclick = () => { if (currentPage < maxPage) { currentPage++; renderTable(); } };
+      tableWrap.appendChild(pager);
+    }
+
+    // Stats bar
+    const okCount = allDevices.filter(d => backupStatus[d.id] === 'ok').length;
+    const failCount = allDevices.filter(d => backupStatus[d.id] === 'fail').length;
     const statsEl = $('#dev-stats');
-    if (statsEl) statsEl.textContent = `${devs.length} device${devs.length === 1 ? '' : 's'}`;
+    if (statsEl) {
+      statsEl.innerHTML = '';
+      statsEl.append(
+        el('span', {}, `${devs.length} device${devs.length === 1 ? '' : 's'}`),
+        el('span', { class: 'badge ok', style: 'margin-left:8px;font-size:0.65rem' }, `${okCount} healthy`),
+        failCount ? el('span', { class: 'badge bad', style: 'margin-left:4px;font-size:0.65rem' }, `${failCount} failed`) : null,
+      );
+    }
   }
 
   async function loadAll() {
@@ -299,18 +442,34 @@ views.inventory = (root) => {
       driverSel.innerHTML = '<option value="">All drivers</option>';
       for (const dr of drivers) driverSel.appendChild(el('option', { value: dr }, dr));
     }
+    // Populate tags/groups filter
+    const tagSel = $('#dev-tag-filter');
+    if (tagSel) {
+      const tags = new Set();
+      for (const d of allDevices) {
+        if (d.group_name) tags.add(d.group_name);
+        if (d.tags) for (const t of d.tags) tags.add(t);
+      }
+      tagSel.innerHTML = '<option value="">All tags</option>';
+      for (const t of [...tags].sort()) tagSel.appendChild(el('option', { value: t }, t));
+    }
     await Promise.all(allDevices.map(async (d) => {
       try {
         const runs = await api('GET', `/devices/${d.id}/runs`);
-        const ok = (runs || []).find(r => r.status === 'success');
-        lastBackups[d.id] = ok ? relativeTime(new Date(ok.started_at)) : '—';
-      } catch (_) { lastBackups[d.id] = '—'; }
+        const latest = (runs || [])[0];
+        if (!latest) { lastBackups[d.id] = '—'; backupStatus[d.id] = 'never'; return; }
+        lastBackups[d.id] = relativeTime(new Date(latest.started_at));
+        backupStatus[d.id] = latest.status === 'success' ? 'ok' : 'fail';
+      } catch (_) { lastBackups[d.id] = '—'; backupStatus[d.id] = 'never'; }
     }));
     renderTable();
   }
 
-  $('#dev-search')?.addEventListener('input', renderTable);
-  $('#dev-group-filter')?.addEventListener('change', renderTable);
+  $('#dev-search')?.addEventListener('input', () => { currentPage = 0; renderTable(); });
+  $('#dev-group-filter')?.addEventListener('change', () => { currentPage = 0; renderTable(); });
+  $('#dev-tag-filter')?.addEventListener('change', () => { currentPage = 0; renderTable(); });
+  $('#dev-status-filter')?.addEventListener('change', () => { currentPage = 0; renderTable(); });
+  $('#dev-pagesize')?.addEventListener('change', () => { currentPage = 0; renderTable(); });
 
   loadAll();
 };
@@ -705,38 +864,165 @@ async function renderSlideoverTab(dev, tab) {
 
   } else if (tab === 'diffs') {
     body.innerHTML = '';
+
+    // Diff viewer controls
+    const diffControls = el('div', { style: 'display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap' });
+    let viewMode = 'unified'; // unified | side-by-side
+    let mutePatterns = JSON.parse(localStorage.getItem('nm.diff.mute') || '["uptime","\\\\d{4}-\\\\d{2}-\\\\d{2}\\\\s+\\\\d{2}:\\\\d{2}","last-change","bytes","packets"]');
+    let muteEnabled = localStorage.getItem('nm.diff.muteOn') !== 'false';
+
+    const viewToggle = el('div', { style: 'display:flex;border:1px solid var(--border-default);border-radius:var(--radius-sm);overflow:hidden' },
+      el('button', { class: 'diff-mode-btn active', 'data-mode': 'unified' }, 'Unified'),
+      el('button', { class: 'diff-mode-btn', 'data-mode': 'side-by-side' }, 'Side-by-Side'));
+    viewToggle.querySelectorAll('.diff-mode-btn').forEach(btn => {
+      btn.onclick = () => {
+        viewMode = btn.dataset.mode;
+        viewToggle.querySelectorAll('.diff-mode-btn').forEach(b => b.classList.toggle('active', b === btn));
+        // Re-render all open diffs
+        body.querySelectorAll('.diff-content[data-loaded="true"]').forEach(dc => {
+          dc.dataset.loaded = 'false';
+          const hdr = dc.previousElementSibling;
+          if (hdr) hdr.click();
+        });
+      };
+    });
+
+    const muteToggle = el('label', { style: 'display:flex;align-items:center;gap:4px;font-size:var(--font-size-xs);cursor:pointer' },
+      el('input', { type: 'checkbox', checked: muteEnabled }),
+      ' Mute dynamic lines');
+    muteToggle.querySelector('input').onchange = (e) => {
+      muteEnabled = e.target.checked;
+      localStorage.setItem('nm.diff.muteOn', String(muteEnabled));
+    };
+
+    const muteEditBtn = el('button', { class: 'btn ghost', style: 'font-size:var(--font-size-xs);padding:2px 8px' }, '⚙ Patterns');
+    muteEditBtn.onclick = () => {
+      const patterns = prompt('Mute patterns (one regex per line):', mutePatterns.join('\n'));
+      if (patterns !== null) {
+        mutePatterns = patterns.split('\n').map(p => p.trim()).filter(Boolean);
+        localStorage.setItem('nm.diff.mute', JSON.stringify(mutePatterns));
+      }
+    };
+
+    diffControls.append(viewToggle, muteToggle, muteEditBtn);
+    body.appendChild(diffControls);
+
+    function shouldMute(line) {
+      if (!muteEnabled) return false;
+      const clean = line.replace(/^[+-]/, '');
+      return mutePatterns.some(p => { try { return new RegExp(p, 'i').test(clean); } catch (_) { return false; } });
+    }
+
+    function renderUnifiedDiff(diffText, container) {
+      container.innerHTML = '';
+      const lines = diffText.split('\n').slice(0, 500);
+      let changeIndex = 0;
+      const changePositions = [];
+      for (const line of lines) {
+        const muted = shouldMute(line);
+        const cls = line.startsWith('+') && !line.startsWith('+++') ? 'diff-add'
+          : line.startsWith('-') && !line.startsWith('---') ? 'diff-del'
+          : line.startsWith('@@') ? 'diff-hunk' : 'diff-ctx';
+        if (cls === 'diff-add' || cls === 'diff-del') changeIndex++;
+        const div = el('div', { class: 'diff-line ' + cls + (muted ? ' diff-muted' : ''), 'data-change': String(changeIndex) }, escapeHTML(line));
+        if ((cls === 'diff-add' || cls === 'diff-del') && !muted) changePositions.push(div);
+        container.appendChild(div);
+      }
+      return changePositions;
+    }
+
+    function renderSideBySideDiff(diffText, container) {
+      container.innerHTML = '';
+      const lines = diffText.split('\n').slice(0, 500);
+      const table = el('table', { class: 'diff-sbs-table' });
+      const changePositions = [];
+      for (const line of lines) {
+        if (line.startsWith('@@') || line.startsWith('---') || line.startsWith('+++')) {
+          table.appendChild(el('tr', { class: 'diff-hunk-row' },
+            el('td', { colspan: '2', class: 'diff-hunk' }, escapeHTML(line))));
+          continue;
+        }
+        const muted = shouldMute(line);
+        const mutedCls = muted ? ' diff-muted' : '';
+        if (line.startsWith('-') && !line.startsWith('---')) {
+          const tr = el('tr', {},
+            el('td', { class: 'diff-del' + mutedCls }, escapeHTML(line.slice(1))),
+            el('td', { class: 'diff-ctx' + mutedCls }));
+          if (!muted) changePositions.push(tr);
+          table.appendChild(tr);
+        } else if (line.startsWith('+') && !line.startsWith('+++')) {
+          const tr = el('tr', {},
+            el('td', { class: 'diff-ctx' + mutedCls }),
+            el('td', { class: 'diff-add' + mutedCls }, escapeHTML(line.slice(1))));
+          if (!muted) changePositions.push(tr);
+          table.appendChild(tr);
+        } else {
+          table.appendChild(el('tr', {},
+            el('td', { class: 'diff-ctx' }, escapeHTML(line.startsWith(' ') ? line.slice(1) : line)),
+            el('td', { class: 'diff-ctx' }, escapeHTML(line.startsWith(' ') ? line.slice(1) : line))));
+        }
+      }
+      container.appendChild(table);
+      return changePositions;
+    }
+
     try {
       const evts = await api('GET', `/changes?device_id=${dev.id}`);
       if (!evts || !evts.length) { body.innerHTML = '<p class="muted">No config changes recorded yet. Run a backup to detect changes.</p>'; return; }
-      for (const c of evts.slice(0, 15)) {
+
+      // Navigation state
+      let activeChangePositions = [];
+      let currentChangeIdx = -1;
+      const navBar = el('div', { class: 'diff-nav', hidden: true },
+        el('button', { class: 'btn ghost', style: 'font-size:0.7rem;padding:2px 8px' }, '▲ Prev'),
+        el('span', { class: 'diff-nav-info', style: 'font-size:var(--font-size-xs)' }, ''),
+        el('button', { class: 'btn ghost', style: 'font-size:0.7rem;padding:2px 8px' }, '▼ Next'));
+      navBar.children[0].onclick = () => navigateChange(-1);
+      navBar.children[2].onclick = () => navigateChange(1);
+      body.appendChild(navBar);
+
+      function navigateChange(dir) {
+        if (!activeChangePositions.length) return;
+        currentChangeIdx = Math.max(0, Math.min(activeChangePositions.length - 1, currentChangeIdx + dir));
+        navBar.querySelector('.diff-nav-info').textContent = `Change ${currentChangeIdx + 1} of ${activeChangePositions.length}`;
+        activeChangePositions[currentChangeIdx].scrollIntoView({ behavior: 'smooth', block: 'center' });
+        activeChangePositions[currentChangeIdx].classList.add('diff-highlight');
+        setTimeout(() => activeChangePositions[currentChangeIdx]?.classList.remove('diff-highlight'), 1500);
+      }
+
+      for (const c of evts.slice(0, 20)) {
         const dt = c.created_at ? relativeTime(new Date(c.created_at)) : '—';
         const addBadge = c.added > 0 ? el('span', { style: 'color:var(--status-ok);font-weight:600;font-size:0.7rem' }, `+${c.added}`) : null;
         const delBadge = c.removed > 0 ? el('span', { style: 'color:var(--status-bad);font-weight:600;font-size:0.7rem;margin-left:6px' }, `-${c.removed}`) : null;
-        const card = el('div', { class: 'card', style: 'margin-bottom:10px;padding:10px 14px;cursor:pointer' });
-        const hdr = el('div', { style: 'display:flex;justify-content:space-between;align-items:center;font-size:var(--font-size-xs)' },
+        const card = el('div', { class: 'card', style: 'margin-bottom:10px;padding:10px 14px' });
+        const hdr = el('div', { style: 'display:flex;justify-content:space-between;align-items:center;font-size:var(--font-size-xs);cursor:pointer' },
           el('span', {}, el('strong', {}, dt), addBadge, delBadge),
           el('code', { style: 'font-size:0.65rem' }, c.new_sha ? c.new_sha.slice(0, 8) : '—'));
-        const diffPre = el('div', { hidden: true, style: 'margin-top:8px;max-height:300px;overflow-y:auto' });
+        const diffContent = el('div', { class: 'diff-content', hidden: true, style: 'margin-top:8px;max-height:400px;overflow-y:auto;border:1px solid var(--border-default);border-radius:var(--radius-sm);padding:4px' });
         hdr.onclick = async () => {
-          if (!diffPre.hidden) { diffPre.hidden = true; return; }
-          diffPre.innerHTML = '<span class="muted">Loading diff…</span>';
-          diffPre.hidden = false;
+          if (!diffContent.hidden && diffContent.dataset.loaded === 'true') { diffContent.hidden = true; navBar.hidden = true; return; }
+          diffContent.innerHTML = '<span class="muted">Loading diff…</span>';
+          diffContent.hidden = false;
           try {
             const diffText = await api('GET', `/changes/${c.id}/diff`);
-            diffPre.innerHTML = '';
+            diffContent.innerHTML = '';
+            diffContent.dataset.loaded = 'true';
             if (!diffText || !diffText.trim()) {
-              diffPre.appendChild(el('p', { class: 'muted', style: 'font-size:var(--font-size-xs)' }, 'No diff available.'));
+              diffContent.appendChild(el('p', { class: 'muted', style: 'font-size:var(--font-size-xs)' }, 'No diff available.'));
+              navBar.hidden = true;
               return;
             }
-            for (const line of diffText.split('\n').slice(0, 200)) {
-              const cls = line.startsWith('+') && !line.startsWith('+++') ? 'diff-add'
-                : line.startsWith('-') && !line.startsWith('---') ? 'diff-del'
-                : line.startsWith('@@') ? 'diff-hunk' : 'diff-ctx';
-              diffPre.appendChild(el('div', { class: 'diff-line ' + cls }, escapeHTML(line)));
+            if (viewMode === 'side-by-side') {
+              activeChangePositions = renderSideBySideDiff(diffText, diffContent);
+            } else {
+              activeChangePositions = renderUnifiedDiff(diffText, diffContent);
             }
-          } catch (e) { diffPre.innerHTML = '<p class="error">' + escapeHTML(e.message) + '</p>'; }
+            currentChangeIdx = -1;
+            navBar.hidden = activeChangePositions.length === 0;
+            navBar.querySelector('.diff-nav-info').textContent = `${activeChangePositions.length} change(s)`;
+          } catch (e) { diffContent.innerHTML = '<p class="error">' + escapeHTML(e.message) + '</p>'; navBar.hidden = true; }
         };
-        card.append(hdr, diffPre);
+        card.append(hdr, diffContent);
         body.appendChild(card);
       }
     } catch (e) { body.innerHTML = '<p class="error">' + escapeHTML(e.message) + '</p>'; }
@@ -1989,110 +2275,210 @@ views.automation = (root) => {
 };
 
 // ---------- Export Modal (bulk config download) ----------
-async function openExportModal() {
+async function openExportModal(preselectedIds) {
   let devices = [];
   try { devices = await api('GET', '/devices'); } catch (_) {}
 
   const backdrop = el('div', { class: 'modal-backdrop' });
-  const box = el('div', { class: 'modal-box', style: 'max-width:600px' });
+  const box = el('div', { class: 'modal-box', style: 'max-width:680px' });
 
-  box.appendChild(el('h3', { style: 'margin:0 0 var(--space-3)' }, '📥 Export Configurations'));
+  box.appendChild(el('h3', { style: 'margin:0 0 4px' }, '📥 Export Configurations'));
+  box.appendChild(el('p', { class: 'muted', style: 'font-size:var(--font-size-xs);margin:0 0 var(--space-3)' },
+    'Download device configurations in your preferred format. Select devices, choose a date range, and pick the output format.'));
 
   const body = el('div', { class: 'export-modal-body' });
 
-  // Device multi-select
+  // --- Section 1: Device multi-select with search ---
+  const devSearch = el('input', { type: 'search', placeholder: 'Filter devices…', style: 'width:100%;padding:6px 10px;border:1px solid var(--border-default);border-radius:var(--radius-sm);font-size:var(--font-size-xs);margin-bottom:6px;background:var(--surface-card);color:var(--text-default)' });
   const selectAllCb = el('input', { type: 'checkbox' });
   const deviceListEl = el('div', { class: 'export-device-list' });
   const checkboxes = [];
+
   for (const d of devices) {
-    const cb = el('input', { type: 'checkbox', value: String(d.id), 'data-hostname': d.hostname });
+    const cb = el('input', { type: 'checkbox', value: String(d.id), 'data-hostname': d.hostname, 'data-driver': d.driver });
+    if (preselectedIds && preselectedIds.includes(d.id)) cb.checked = true;
     checkboxes.push(cb);
-    deviceListEl.appendChild(el('label', {}, cb, ` ${escapeHTML(d.hostname)} (${escapeHTML(d.driver)})`));
+    const lbl = el('label', {}, cb,
+      el('span', { style: 'font-weight:500' }, ` ${escapeHTML(d.hostname)}`),
+      el('span', { style: 'color:var(--text-muted);margin-left:6px;font-size:0.7rem' }, escapeHTML(d.driver)));
+    lbl.dataset.searchable = `${d.hostname} ${d.driver} ${d.address}`.toLowerCase();
+    deviceListEl.appendChild(lbl);
   }
-  selectAllCb.onchange = () => checkboxes.forEach(cb => { cb.checked = selectAllCb.checked; });
+
+  devSearch.oninput = () => {
+    const q = devSearch.value.toLowerCase();
+    for (const lbl of deviceListEl.children) {
+      lbl.hidden = q && !lbl.dataset.searchable.includes(q);
+    }
+  };
+  selectAllCb.onchange = () => {
+    const visible = [...deviceListEl.querySelectorAll('label:not([hidden]) input[type=checkbox]')];
+    visible.forEach(cb => { cb.checked = selectAllCb.checked; });
+  };
+
+  const selectedCount = el('span', { style: 'font-size:var(--font-size-xs);color:var(--text-muted)' }, '0 selected');
+  deviceListEl.addEventListener('change', () => {
+    const n = checkboxes.filter(cb => cb.checked).length;
+    selectedCount.textContent = `${n} selected`;
+  });
+  // Fire initial count for preselected
+  setTimeout(() => {
+    const n = checkboxes.filter(cb => cb.checked).length;
+    selectedCount.textContent = `${n} selected`;
+  }, 0);
+
   body.append(
     el('div', { style: 'display:flex;justify-content:space-between;align-items:center' },
-      el('label', { style: 'font-size:var(--font-size-sm);font-weight:600' }, 'Select devices'),
-      el('label', { style: 'font-size:var(--font-size-xs);display:flex;align-items:center;gap:4px;cursor:pointer' }, selectAllCb, ' Select all')),
-    deviceListEl);
+      el('label', { style: 'font-size:var(--font-size-sm);font-weight:600' }, 'Devices'),
+      el('div', { style: 'display:flex;align-items:center;gap:8px' },
+        selectedCount,
+        el('label', { style: 'font-size:var(--font-size-xs);display:flex;align-items:center;gap:4px;cursor:pointer' }, selectAllCb, ' All'))),
+    devSearch, deviceListEl);
 
-  // Format selector
-  let selectedFormat = 'text';
+  // --- Section 2: Date range ---
+  const today = new Date().toISOString().split('T')[0];
+  const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+  const dateFrom = el('input', { type: 'date', value: weekAgo, style: 'padding:5px 8px;border:1px solid var(--border-default);border-radius:var(--radius-sm);font-size:var(--font-size-xs);background:var(--surface-card);color:var(--text-default)' });
+  const dateTo = el('input', { type: 'date', value: today, style: 'padding:5px 8px;border:1px solid var(--border-default);border-radius:var(--radius-sm);font-size:var(--font-size-xs);background:var(--surface-card);color:var(--text-default)' });
+  const versionSelect = el('select', { style: 'padding:5px 8px;border:1px solid var(--border-default);border-radius:var(--radius-sm);font-size:var(--font-size-xs);background:var(--surface-card);color:var(--text-default)' },
+    el('option', { value: 'latest' }, 'Latest version only'),
+    el('option', { value: 'all' }, 'All versions in range'));
+
+  body.append(
+    el('div', { class: 'section-divider', style: 'margin:var(--space-2) 0' }, 'VERSION & DATE RANGE'),
+    el('div', { style: 'display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;align-items:end' },
+      el('div', {},
+        el('label', { style: 'font-size:var(--font-size-xs);font-weight:600;display:block;margin-bottom:2px' }, 'From'),
+        dateFrom),
+      el('div', {},
+        el('label', { style: 'font-size:var(--font-size-xs);font-weight:600;display:block;margin-bottom:2px' }, 'To'),
+        dateTo),
+      el('div', {},
+        el('label', { style: 'font-size:var(--font-size-xs);font-weight:600;display:block;margin-bottom:2px' }, 'Versions'),
+        versionSelect)));
+
+  // --- Section 3: Format selector ---
+  let selectedFormat = 'zip';
   const formatGroup = el('div', { class: 'export-format-group' });
   const formats = [
-    { id: 'text', label: '📄 Plain Text (.cfg)', desc: 'Standard readable config' },
-    { id: 'json', label: '{ } JSON', desc: 'Structured for scripting' },
-    { id: 'zip', label: '📦 ZIP Archive', desc: 'Bundle all as .zip' },
+    { id: 'zip', label: '📦 ZIP Archive', desc: 'Bundle all device configs as hostname.cfg in a ZIP file' },
+    { id: 'text', label: '📄 Plain Text (.cfg)', desc: 'Concatenated readable config file' },
+    { id: 'json', label: '{ } JSON', desc: 'Structured JSON array for programmatic analysis' },
+    { id: 'binary', label: '💾 Binary (.backup)', desc: 'Vendor-specific binary (MikroTik .backup files)' },
   ];
   for (const f of formats) {
-    const btn = el('button', { type: 'button', class: 'export-format-btn' + (f.id === 'text' ? ' selected' : '') }, f.label);
+    const btn = el('button', { type: 'button', class: 'export-format-btn' + (f.id === 'zip' ? ' selected' : ''), title: f.desc }, f.label);
     btn.onclick = () => {
       selectedFormat = f.id;
       formatGroup.querySelectorAll('.export-format-btn').forEach(b => b.classList.remove('selected'));
       btn.classList.add('selected');
+      // Show binary note if applicable
+      binaryNote.hidden = f.id !== 'binary';
     };
     formatGroup.appendChild(btn);
   }
-  body.append(
-    el('label', { style: 'font-size:var(--font-size-sm);font-weight:600' }, 'Export format'),
-    formatGroup);
+  const binaryNote = el('p', { style: 'font-size:var(--font-size-xs);color:var(--status-warn);margin:4px 0 0', hidden: true },
+    '⚠ Binary export only available for devices with .backup artifacts (e.g. MikroTik). Others will export as text.');
 
-  // Actions
-  const statusEl = el('p', { class: 'muted', style: 'font-size:var(--font-size-xs);min-height:1.2em' });
+  body.append(
+    el('div', { class: 'section-divider', style: 'margin:var(--space-2) 0' }, 'EXPORT FORMAT'),
+    formatGroup, binaryNote);
+
+  // --- Section 4: Actions ---
+  const statusEl = el('p', { class: 'muted', style: 'font-size:var(--font-size-xs);min-height:1.4em;margin:var(--space-2) 0 0' });
+  const progressWrap = el('div', { style: 'display:none;margin-top:8px' });
+  const progressFill = el('div', { class: 'progress-bar-fill', style: 'width:0%' });
+  progressWrap.appendChild(el('div', { class: 'progress-bar-wrap' }, progressFill));
+
   const exportBtn = el('button', { class: 'btn' }, '💾 Download');
   const cancelBtn = el('button', { class: 'btn ghost' }, 'Cancel');
   cancelBtn.onclick = () => backdrop.remove();
 
   exportBtn.onclick = async () => {
     const ids = checkboxes.filter(cb => cb.checked).map(cb => Number(cb.value));
-    if (!ids.length) { statusEl.textContent = 'Select at least one device.'; statusEl.className = 'error'; return; }
-    statusEl.textContent = 'Exporting…'; statusEl.className = 'muted';
+    if (!ids.length) { statusEl.textContent = '⚠ Select at least one device.'; statusEl.style.color = 'var(--status-bad)'; return; }
+    statusEl.textContent = `Exporting ${ids.length} device(s)…`; statusEl.style.color = '';
     exportBtn.disabled = true;
+    progressWrap.style.display = 'block';
 
-    if (selectedFormat === 'zip') {
-      // Use bulk export endpoint
-      try {
+    try {
+      if (selectedFormat === 'zip' || selectedFormat === 'binary') {
+        // Server-side ZIP generation
         const resp = await fetch('/api/v1/export/configs', {
           method: 'POST', credentials: 'same-origin',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ device_ids: ids, format: 'text' }),
+          body: JSON.stringify({
+            device_ids: ids,
+            format: selectedFormat === 'binary' ? 'binary' : 'text',
+            from_date: dateFrom.value,
+            to_date: dateTo.value,
+            all_versions: versionSelect.value === 'all',
+          }),
         });
-        if (!resp.ok) throw new Error(resp.statusText);
+        if (!resp.ok) {
+          const errBody = await resp.text();
+          throw new Error(resp.statusText + (errBody ? ': ' + errBody : ''));
+        }
+        progressFill.style.width = '100%';
         const blob = await resp.blob();
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = 'netmantle-configs.zip';
+        a.download = selectedFormat === 'binary' ? 'netmantle-backups.zip' : 'netmantle-configs.zip';
         a.click();
         URL.revokeObjectURL(a.href);
-        statusEl.textContent = '✓ Downloaded'; statusEl.className = 'muted';
-      } catch (e) { statusEl.textContent = 'Export failed: ' + e.message; statusEl.className = 'error'; }
-    } else {
-      // Individual download per device
-      try {
+        statusEl.textContent = '✓ Download started'; statusEl.style.color = 'var(--status-ok)';
+      } else {
+        // Client-side assembly for text/JSON
         const configs = [];
-        for (const id of ids) {
-          const cfg = await api('GET', `/devices/${id}/config`);
-          const dev = devices.find(d => d.id === id);
-          configs.push({ hostname: dev?.hostname || 'device-' + id, config: cfg });
+        for (let i = 0; i < ids.length; i++) {
+          progressFill.style.width = Math.round(((i + 1) / ids.length) * 100) + '%';
+          const id = ids[i];
+          try {
+            const cfg = await api('GET', `/devices/${id}/config`);
+            const dev = devices.find(d => d.id === id);
+            configs.push({
+              hostname: dev?.hostname || 'device-' + id,
+              driver: dev?.driver || 'unknown',
+              address: dev?.address || '',
+              exported_at: new Date().toISOString(),
+              config: typeof cfg === 'string' ? cfg : JSON.stringify(cfg),
+            });
+          } catch (_) { /* skip devices without configs */ }
         }
+        if (!configs.length) throw new Error('No configurations available for selected devices.');
+
         if (selectedFormat === 'json') {
-          const blob = new Blob([JSON.stringify(configs, null, 2)], { type: 'application/json' });
+          const output = {
+            export_date: new Date().toISOString(),
+            device_count: configs.length,
+            devices: configs,
+          };
+          const blob = new Blob([JSON.stringify(output, null, 2)], { type: 'application/json' });
           const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
           a.download = 'netmantle-configs.json'; a.click();
+          URL.revokeObjectURL(a.href);
         } else {
-          // Single text file concatenated
-          const text = configs.map(c => `# === ${c.hostname} ===\n${c.config}\n`).join('\n');
+          // Plain text concatenated with clear separators
+          const header = `# NetMantle Configuration Export\n# Date: ${new Date().toISOString()}\n# Devices: ${configs.length}\n${'#'.repeat(60)}\n\n`;
+          const text = header + configs.map(c =>
+            `${'#'.repeat(60)}\n# Device: ${c.hostname}\n# Driver: ${c.driver}\n# Address: ${c.address}\n${'#'.repeat(60)}\n\n${c.config}\n`
+          ).join('\n');
           const blob = new Blob([text], { type: 'text/plain' });
           const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
           a.download = 'netmantle-configs.cfg'; a.click();
+          URL.revokeObjectURL(a.href);
         }
-        statusEl.textContent = '✓ Downloaded'; statusEl.className = 'muted';
-      } catch (e) { statusEl.textContent = 'Export failed: ' + e.message; statusEl.className = 'error'; }
+        statusEl.textContent = `✓ Exported ${configs.length} config(s)`; statusEl.style.color = 'var(--status-ok)';
+      }
+    } catch (e) {
+      statusEl.textContent = '✗ Export failed: ' + e.message; statusEl.style.color = 'var(--status-bad)';
     }
     exportBtn.disabled = false;
+    setTimeout(() => { progressWrap.style.display = 'none'; progressFill.style.width = '0%'; }, 2000);
   };
 
-  body.append(statusEl, el('div', { style: 'display:flex;gap:8px;justify-content:flex-end' }, cancelBtn, exportBtn));
+  body.append(statusEl, progressWrap,
+    el('div', { style: 'display:flex;gap:8px;justify-content:flex-end;margin-top:var(--space-2)' }, cancelBtn, exportBtn));
   box.appendChild(body);
   backdrop.appendChild(box);
   backdrop.addEventListener('click', (e) => { if (e.target === backdrop) backdrop.remove(); });
