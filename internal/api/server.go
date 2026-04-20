@@ -192,7 +192,10 @@ func NewServer(d Deps) http.Handler {
 		mux.Handle("POST /api/v1/probes", s.auth(s.requireWrite(s.handleCreateProbe)))
 		mux.Handle("DELETE /api/v1/probes/{id}", s.auth(s.requireWrite(s.handleDeleteProbe)))
 		mux.Handle("GET /api/v1/probes/{id}/runs", s.auth(s.handleListProbeRuns))
+		mux.Handle("POST /api/v1/probes/{id}/run", s.auth(s.requireWrite(s.handleRunProbeNow)))
 	}
+	// Topology discovery (creates/runs the neighbors probe against all devices).
+	mux.Handle("POST /api/v1/topology/discover", s.auth(s.requireWrite(s.handleTopologyDiscover)))
 
 	// Phase 9 — tenants & quotas.
 	if d.Tenants != nil {

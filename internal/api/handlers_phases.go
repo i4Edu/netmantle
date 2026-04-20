@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/i4Edu/netmantle/internal/automation"
@@ -752,6 +753,156 @@ func (s *server) handleDeleteProbe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleRunProbeNow runs a probe against all tenant devices immediately.
+// It uses the backup service's session factory so credential resolution
+// matches the regular backup path.
+func (s *server) handleRunProbeNow(w http.ResponseWriter, r *http.Request) {
+	u := userFromContext(r.Context())
+	probeID, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+
+	// Load the probe to get its command.
+	ps, err := s.Probes.List(r.Context(), u.TenantID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var probe *probes.Probe
+	for i := range ps {
+		if ps[i].ID == probeID {
+			probe = &ps[i]
+			break
+		}
+	}
+	if probe == nil {
+		writeError(w, http.StatusNotFound, "probe not found")
+		return
+	}
+
+	// Load devices.
+	devs, err := s.Devices.ListDevices(r.Context(), u.TenantID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Run the probe concurrently against each device (max 10 parallel).
+	sem := make(chan struct{}, 10)
+	type result struct {
+		DeviceID int64  `json:"device_id"`
+		Hostname string `json:"hostname"`
+		Status   string `json:"status"`
+		Error    string `json:"error,omitempty"`
+	}
+	results := make([]result, len(devs))
+	var wg sync.WaitGroup
+	for i, dev := range devs {
+		if dev.CredentialID == nil {
+			results[i] = result{DeviceID: dev.ID, Hostname: dev.Hostname, Status: "skipped", Error: "no credential"}
+			continue
+		}
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			out, runErr := s.Backup.RunProbe(r.Context(), devs[i], probe.Command)
+			res := result{DeviceID: devs[i].ID, Hostname: devs[i].Hostname, Status: "ok"}
+			if runErr != nil {
+				res.Status = "failed"
+				res.Error = runErr.Error()
+				_ = s.Probes.RecordRun(r.Context(), probeID, devs[i].ID, "", runErr)
+			} else {
+				_ = s.Probes.RecordRun(r.Context(), probeID, devs[i].ID, out, nil)
+			}
+			results[i] = res
+		}(i)
+	}
+	wg.Wait()
+	writeJSON(w, http.StatusOK, map[string]any{"probe_id": probeID, "results": results})
+}
+
+// handleTopologyDiscover ensures a "neighbors" probe exists for the tenant
+// and runs it against all devices immediately. This seeds the topology graph.
+func (s *server) handleTopologyDiscover(w http.ResponseWriter, r *http.Request) {
+	u := userFromContext(r.Context())
+	ctx := r.Context()
+
+	// Find or create the "neighbors" probe.
+	ps, err := s.Probes.List(ctx, u.TenantID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var neighborProbe *probes.Probe
+	for i := range ps {
+		if ps[i].Name == "neighbors" {
+			neighborProbe = &ps[i]
+			break
+		}
+	}
+	if neighborProbe == nil {
+		// Create with a sensible default command covering LLDP and CDP.
+		// Drivers that don't support these commands will record an error run.
+		p, err := s.Probes.Create(ctx, probes.Probe{
+			TenantID:  u.TenantID,
+			Name:      "neighbors",
+			Command:   "show lldp neighbors",
+			IntervalS: 3600,
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		neighborProbe = &p
+	}
+
+	// Run against all devices.
+	devs, err := s.Devices.ListDevices(ctx, u.TenantID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	sem := make(chan struct{}, 8)
+	type devResult struct {
+		DeviceID int64  `json:"device_id"`
+		Hostname string `json:"hostname"`
+		Status   string `json:"status"`
+		Links    int    `json:"links"`
+		Error    string `json:"error,omitempty"`
+	}
+	results := make([]devResult, len(devs))
+	var wg sync.WaitGroup
+	for i, dev := range devs {
+		if dev.CredentialID == nil {
+			results[i] = devResult{DeviceID: dev.ID, Hostname: dev.Hostname, Status: "skipped", Error: "no credential"}
+			continue
+		}
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			out, runErr := s.Backup.RunProbe(ctx, devs[i], neighborProbe.Command)
+			res := devResult{DeviceID: devs[i].ID, Hostname: devs[i].Hostname, Status: "ok"}
+			if runErr != nil {
+				res.Status = "failed"
+				res.Error = runErr.Error()
+				_ = s.Probes.RecordRun(ctx, neighborProbe.ID, devs[i].ID, "", runErr)
+			} else {
+				_ = s.Probes.RecordRun(ctx, neighborProbe.ID, devs[i].ID, out, nil)
+				res.Links = len(netops.FromNeighborOutput(devs[i].Hostname, out))
+			}
+			results[i] = res
+		}(i)
+	}
+	wg.Wait()
+	writeJSON(w, http.StatusOK, map[string]any{"probe_id": neighborProbe.ID, "results": results})
 }
 
 func (s *server) handleListProbeRuns(w http.ResponseWriter, r *http.Request) {

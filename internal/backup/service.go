@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,6 +52,11 @@ type Service struct {
 	// It should use SSH exec mode (no interactive shell / PTY) to avoid the
 	// ANSI terminal-capability queries that MikroTik sends before its prompt.
 	MikrotikSession SessionFactory
+
+	// TelnetSession, when non-nil, is used for devices whose driver name
+	// contains "telnet" (e.g. "generic_telnet", "cisco_telnet"). Falls back
+	// to NewSession if nil, which will fail on non-SSH endpoints.
+	TelnetSession SessionFactory
 
 	// Audit, when set, is used for all audit_log writes so the format
 	// stays consistent with the rest of the codebase (see internal/audit).
@@ -346,23 +352,28 @@ func nullIfEmpty(s string) any {
 }
 
 func (s *Service) sessionFactoryForDriver(name string) SessionFactory {
-	switch name {
-	case "mikrotik_routeros":
+	switch {
+	case name == "mikrotik_routeros":
 		if s.MikrotikSession != nil {
 			return s.MikrotikSession
 		}
 		return missingSessionFactory("mikrotik_exec", name)
-	case "cisco_netconf", "junos_netconf":
+	case strings.Contains(name, "telnet"):
+		if s.TelnetSession != nil {
+			return s.TelnetSession
+		}
+		return missingSessionFactory("telnet", name)
+	case name == "cisco_netconf" || name == "junos_netconf":
 		if s.NetconfSession != nil {
 			return s.NetconfSession
 		}
 		return missingSessionFactory("netconf", name)
-	case "restconf":
+	case name == "restconf":
 		if s.RestconfSession != nil {
 			return s.RestconfSession
 		}
 		return missingSessionFactory("restconf", name)
-	case "gnmi":
+	case name == "gnmi":
 		if s.GNMISession != nil {
 			return s.GNMISession
 		}
@@ -375,6 +386,34 @@ func missingSessionFactory(transportName, driverName string) SessionFactory {
 	return func(_ context.Context, _ devices.Device, _, _ string) (drivers.Session, func() error, error) {
 		return nil, nil, fmt.Errorf("backup: %s session factory is not configured for driver %q", transportName, driverName)
 	}
+}
+
+// RunProbe opens a session to the device, executes cmd, and returns the
+// output. It reuses the same session factory routing as BackupNow so that
+// driver-specific transports (exec-mode MikroTik, Telnet, etc.) are used.
+func (s *Service) RunProbe(ctx context.Context, dev devices.Device, cmd string) (string, error) {
+	if dev.CredentialID == nil {
+		return "", errors.New("backup: device has no credential")
+	}
+	username, secret, err := s.Credentials.Reveal(ctx, dev.TenantID, *dev.CredentialID)
+	if err != nil {
+		return "", fmt.Errorf("backup: reveal credentials: %w", err)
+	}
+	pctx, cancel := context.WithTimeout(ctx, s.Timeout)
+	defer cancel()
+
+	factory := s.sessionFactoryForDriver(dev.Driver)
+	sess, closer, err := factory(pctx, dev, username, secret)
+	if err != nil {
+		return "", fmt.Errorf("backup: probe session: %w", err)
+	}
+	defer func() { _ = closer() }()
+
+	out, err := sess.Run(pctx, cmd)
+	if err != nil {
+		return "", fmt.Errorf("backup: probe run %q: %w", cmd, err)
+	}
+	return out, nil
 }
 
 // ApplyRenderedConfig opens a driver-appropriate transport session and applies

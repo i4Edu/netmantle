@@ -247,6 +247,18 @@ func runServe(argv []string) error {
 	bSvc.GNMISession = gnmiFactory
 	bSvc.MikrotikSession = mikrotikFactory
 
+	// Telnet factory for devices using *_telnet driver names.
+	telnetFactory := func(ctx context.Context, d devices.Device, user, pw string) (drivers.Session, func() error, error) {
+		return transport.DialTelnet(ctx, transport.TelnetConfig{
+			Address:  d.Address,
+			Port:     d.Port,
+			Username: user,
+			Password: pw,
+			Timeout:  cfg.Backup.Timeout,
+		})
+	}
+	bSvc.TelnetSession = telnetFactory
+
 	// Phase 2..10 services.
 	chgSvc := changes.New(db, store, &diff.Engine{Rules: diff.DefaultRules()})
 	notifySvc := notify.New(db, sealer, log)

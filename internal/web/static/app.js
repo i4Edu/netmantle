@@ -1314,7 +1314,29 @@ function topologyNodeCountFromLinks(links) {
 
 // ---------- Topology (interactive SVG canvas with hand-rolled force layout) ----------
 views.topology = async (root) => {
-  root.appendChild(el('h2', {}, 'Topology'));
+  root.appendChild(el('div', { class: 'page-header' },
+    el('div', { class: 'page-header-left' },
+      el('div', { class: 'page-header-breadcrumb' }, 'Core Operations'),
+      el('div', { class: 'page-header-title' }, 'Network Topology')),
+    el('div', { class: 'page-header-actions' },
+      el('button', { class: 'btn', id: 'topo-discover-btn' }, '🔍 Run LLDP/CDP Discovery'))));
+
+  // Wire the discovery button.
+  root.querySelector('#topo-discover-btn').onclick = async () => {
+    const btn = root.querySelector('#topo-discover-btn');
+    btn.disabled = true; btn.textContent = '⏳ Running probes…';
+    try {
+      const res = await api('POST', '/topology/discover');
+      const ok = (res.results || []).filter(r => r.status === 'ok').length;
+      const failed = (res.results || []).filter(r => r.status === 'failed').length;
+      btn.textContent = `✓ Done (${ok} ok, ${failed} failed) — reloading…`;
+      setTimeout(() => { router(); }, 1500);
+    } catch (e) {
+      btn.disabled = false; btn.textContent = '🔍 Run LLDP/CDP Discovery';
+      alert('Discovery failed: ' + e.message);
+    }
+  };
+
   let data;
   try { data = await api('GET', '/topology'); }
   catch (e) { root.appendChild(errorState('Error: ' + e.message)); return; }
@@ -1322,7 +1344,24 @@ views.topology = async (root) => {
   const nodeCount = Number.isFinite(data?.node_count) ? data.node_count : topologyNodeCountFromLinks(links);
   const linkCount = Number.isFinite(data?.edge_count) ? data.edge_count : links.length;
   if (!links.length) {
-    root.appendChild(emptyState('No topology links recorded yet — install LLDP/CDP probes to populate this view.'));
+    const empty = el('div', { class: 'card', style: 'text-align:center;padding:48px 32px;margin-top:24px' },
+      el('div', { style: 'font-size:3rem;margin-bottom:16px' }, '🗺'),
+      el('h3', { style: 'margin:0 0 8px' }, 'No topology data yet'),
+      el('p', { style: 'color:var(--text-muted);font-size:var(--font-size-sm);margin:0 0 20px;max-width:480px;margin-left:auto;margin-right:auto' },
+        'Click "Run LLDP/CDP Discovery" above to poll all devices for neighbor tables. NetMantle will run ',
+        el('code', {}, 'show lldp neighbors'), ' against each device and build the topology graph automatically.'),
+      el('div', { style: 'display:flex;gap:12px;justify-content:center;flex-wrap:wrap' },
+        el('div', { class: 'card', style: 'padding:12px 20px;min-width:160px' },
+          el('div', { style: 'font-size:1.5rem' }, '📡'), el('div', { style: 'font-size:var(--font-size-sm);margin-top:4px' }, 'LLDP (IEEE 802.1ab)'),
+          el('div', { class: 'muted', style: 'font-size:var(--font-size-xs)' }, 'Cisco, Juniper, Arista, Huawei')),
+        el('div', { class: 'card', style: 'padding:12px 20px;min-width:160px' },
+          el('div', { style: 'font-size:1.5rem' }, '🔗'), el('div', { style: 'font-size:var(--font-size-sm);margin-top:4px' }, 'CDP (Cisco)'),
+          el('div', { class: 'muted', style: 'font-size:var(--font-size-xs)' }, 'Cisco IOS/NX-OS/IOS-XR')),
+        el('div', { class: 'card', style: 'padding:12px 20px;min-width:160px' },
+          el('div', { style: 'font-size:1.5rem' }, '🛰' ), el('div', { style: 'font-size:var(--font-size-sm);margin-top:4px' }, 'MikroTik neighbors'),
+          el('div', { class: 'muted', style: 'font-size:var(--font-size-xs)' }, 'RouterOS /ip neighbor')),
+      ));
+    root.appendChild(empty);
     return;
   }
   // Optional: also load devices so we can colour nodes by compliance.

@@ -24,6 +24,7 @@ func init() {
 	drivers.Register(&vsolOS{})
 	drivers.Register(&dbcOS{})
 	drivers.Register(&genericSSH{})
+	drivers.Register(&genericTelnet{})
 	// New vendor drivers (hardened CLI backup path).
 	drivers.Register(&fortiosDriver{})
 	drivers.Register(&paloaltoPANOS{})
@@ -432,4 +433,26 @@ func (huaweiVRP) FetchConfig(ctx context.Context, s drivers.Session) ([]drivers.
 	return []drivers.ConfigArtifact{
 		{Name: "running-config", Content: []byte(strings.TrimRight(out, "\n") + "\n")},
 	}, nil
+}
+
+// genericTelnet is a fallback driver for Telnet-only devices. It mirrors
+// genericSSH but signals to backup.Service that the TelnetSession factory
+// should be used (the driver name contains "telnet"). Operators should
+// prefer vendor-specific drivers where available; use this only for
+// one-off or unknown platforms reachable only via Telnet.
+type genericTelnet struct{}
+
+func (genericTelnet) Name() string { return "generic_telnet" }
+
+func (genericTelnet) FetchConfig(ctx context.Context, s drivers.Session) ([]drivers.ConfigArtifact, error) {
+out, err := s.Run(ctx, "show configuration")
+if err != nil {
+out, err = s.Run(ctx, "show running-config")
+if err != nil {
+return nil, fmt.Errorf("generic_telnet: no usable show command: %w", err)
+}
+}
+return []drivers.ConfigArtifact{
+{Name: "configuration", Content: []byte(strings.TrimRight(out, "\n") + "\n")},
+}, nil
 }
