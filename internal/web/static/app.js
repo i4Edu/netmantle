@@ -841,22 +841,106 @@ async function renderSlideoverTab(dev, tab) {
     try {
       const runs = await api('GET', `/devices/${dev.id}/runs`);
       if (!runs || !runs.length) { body.innerHTML = '<p class="muted">No backup runs yet.</p>'; return; }
-      const tbl = el('table', { class: 'device-table' },
-        el('thead', {}, el('tr', {}, el('th', {}, 'Started'), el('th', {}, 'Status'), el('th', {}, 'Commit'), el('th', {}, 'Error'))),
-        el('tbody'));
+
+      body.appendChild(el('p', { style: 'font-size:var(--font-size-xs);color:var(--text-muted);margin:0 0 10px' },
+        `${runs.length} backup run(s). Click a row to view config, download, or rollback.`));
+
       for (const r of runs) {
         const st = r.status === 'success' ? 'ok' : r.status === 'running' ? 'warn' : 'bad';
         const dt = r.started_at ? new Date(r.started_at).toLocaleString() : '—';
-        tbl.querySelector('tbody').appendChild(el('tr', {},
-          el('td', {}, dt),
-          el('td', {}, el('span', { class: 'badge badge-' + st }, r.status)),
-          el('td', {}, r.commit_sha ? el('code', { style: 'font-size:0.7rem' }, r.commit_sha.slice(0, 8)) : el('span', {}, '—')),
-          el('td', { style: 'font-size:0.75rem;color:var(--text-muted);max-width:160px;overflow:hidden;text-overflow:ellipsis' }, escapeHTML(r.error || '')),
-        ));
-      }
-      body.appendChild(tbl);
+        const card = el('div', { class: 'backup-version-card' });
 
-      // Export toolbar
+        const header = el('div', { class: 'bv-header' },
+          el('span', { class: 'badge badge-' + st }, r.status),
+          el('span', { class: 'bv-date' }, dt),
+          r.commit_sha ? el('code', { class: 'bv-sha' }, r.commit_sha.slice(0, 8)) : el('span', {}, '—'),
+          r.error ? el('span', { class: 'bv-error', title: r.error }, '⚠') : null);
+
+        const expandArea = el('div', { class: 'bv-expand', hidden: true });
+
+        header.onclick = async () => {
+          if (!expandArea.hidden) { expandArea.hidden = true; return; }
+          // Collapse all other expanded cards
+          body.querySelectorAll('.bv-expand').forEach(e => { e.hidden = true; });
+          expandArea.hidden = false;
+
+          if (expandArea.dataset.loaded) return;
+          expandArea.innerHTML = '<p class="muted" style="font-size:var(--font-size-xs)">Loading config…</p>';
+
+          if (!r.commit_sha || r.status !== 'success') {
+            expandArea.innerHTML = r.error
+              ? `<p class="error" style="font-size:var(--font-size-xs)">Run failed: ${escapeHTML(r.error)}</p>`
+              : '<p class="muted" style="font-size:var(--font-size-xs)">No config snapshot for this run.</p>';
+            expandArea.dataset.loaded = 'true';
+            return;
+          }
+
+          try {
+            const cfg = await api('GET', `/devices/${dev.id}/config?sha=${r.commit_sha}`);
+            const cfgText = typeof cfg === 'string' ? cfg : JSON.stringify(cfg, null, 2);
+            expandArea.innerHTML = '';
+            expandArea.dataset.loaded = 'true';
+
+            // Action buttons
+            const actions = el('div', { class: 'bv-actions' });
+            const dlBtn = el('button', { class: 'btn ghost' }, '💾 Download .cfg');
+            dlBtn.onclick = (e) => {
+              e.stopPropagation();
+              const blob = new Blob([cfgText], { type: 'text/plain' });
+              const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+              a.download = `${dev.hostname}_${r.commit_sha.slice(0,8)}.cfg`; a.click();
+              URL.revokeObjectURL(a.href);
+            };
+            const copyBtn = el('button', { class: 'btn ghost' }, '📋 Copy');
+            copyBtn.onclick = (e) => {
+              e.stopPropagation();
+              navigator.clipboard.writeText(cfgText).then(() => {
+                copyBtn.textContent = '✓ Copied';
+                setTimeout(() => { copyBtn.textContent = '📋 Copy'; }, 1500);
+              });
+            };
+            const rollbackBtn = el('button', { class: 'btn ghost' }, '⏪ Apply this version');
+            rollbackBtn.title = 'Rollback device to this configuration version';
+            rollbackBtn.onclick = async (e) => {
+              e.stopPropagation();
+              if (!confirm(`Apply config from ${dt} (${r.commit_sha.slice(0,8)}) to ${dev.hostname}?\n\nThis will push this configuration to the device.`)) return;
+              rollbackBtn.disabled = true; rollbackBtn.textContent = 'Applying…';
+              try {
+                await api('POST', `/devices/${dev.id}/rollback`, { target_sha: r.commit_sha });
+                rollbackBtn.textContent = '✓ Applied';
+                rollbackBtn.className = 'btn';
+              } catch (err) {
+                rollbackBtn.textContent = '✗ Failed';
+                alert('Rollback failed: ' + err.message);
+              }
+              setTimeout(() => { rollbackBtn.disabled = false; rollbackBtn.textContent = '⏪ Apply this version'; rollbackBtn.className = 'btn ghost'; }, 3000);
+            };
+
+            const diffBtn = el('button', { class: 'btn ghost' }, '📊 Show Diff');
+            diffBtn.onclick = (e) => {
+              e.stopPropagation();
+              // Switch to diffs tab
+              const diffsTab = document.querySelector('.slideover-tab[data-tab="diffs"]');
+              if (diffsTab) diffsTab.click();
+            };
+
+            actions.append(dlBtn, copyBtn, rollbackBtn, diffBtn);
+            expandArea.appendChild(actions);
+
+            // Config preview (large expandable view)
+            const pre = el('pre', { class: 'bv-config-pre' }, escapeHTML(cfgText));
+            expandArea.appendChild(pre);
+          } catch (err) {
+            expandArea.innerHTML = `<p class="error" style="font-size:var(--font-size-xs)">${escapeHTML(err.message)}</p>`;
+            expandArea.dataset.loaded = 'true';
+          }
+        };
+
+        card.append(header, expandArea);
+        body.appendChild(card);
+      }
+
+      // Export toolbar at bottom
       body.appendChild(exportToolbar(async () => {
         try { return await api('GET', `/devices/${dev.id}/config`); } catch (_) { return ''; }
       }));
@@ -998,7 +1082,7 @@ async function renderSlideoverTab(dev, tab) {
         const hdr = el('div', { style: 'display:flex;justify-content:space-between;align-items:center;font-size:var(--font-size-xs);cursor:pointer' },
           el('span', {}, el('strong', {}, dt), addBadge, delBadge),
           el('code', { style: 'font-size:0.65rem' }, c.new_sha ? c.new_sha.slice(0, 8) : '—'));
-        const diffContent = el('div', { class: 'diff-content', hidden: true, style: 'margin-top:8px;max-height:400px;overflow-y:auto;border:1px solid var(--border-default);border-radius:var(--radius-sm);padding:4px' });
+        const diffContent = el('div', { class: 'diff-content', hidden: true, style: 'margin-top:8px;max-height:70vh;overflow-y:auto;border:1px solid var(--border-default);border-radius:var(--radius-sm);padding:4px' });
         hdr.onclick = async () => {
           if (!diffContent.hidden && diffContent.dataset.loaded === 'true') { diffContent.hidden = true; navBar.hidden = true; return; }
           diffContent.innerHTML = '<span class="muted">Loading diff…</span>';
@@ -1012,10 +1096,44 @@ async function renderSlideoverTab(dev, tab) {
               navBar.hidden = true;
               return;
             }
+
+            // Download and copy buttons for the diff
+            const diffActions = el('div', { style: 'display:flex;gap:6px;margin-bottom:6px;padding:4px 0;border-bottom:1px solid var(--border-default)' });
+            const dlDiffBtn = el('button', { class: 'btn ghost', style: 'font-size:0.7rem;padding:3px 10px' }, '💾 Download diff');
+            dlDiffBtn.onclick = (ev) => {
+              ev.stopPropagation();
+              const blob = new Blob([diffText], { type: 'text/plain' });
+              const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+              a.download = `${dev.hostname}_${(c.new_sha || 'diff').slice(0,8)}.patch`; a.click();
+              URL.revokeObjectURL(a.href);
+            };
+            const cpDiffBtn = el('button', { class: 'btn ghost', style: 'font-size:0.7rem;padding:3px 10px' }, '📋 Copy diff');
+            cpDiffBtn.onclick = (ev) => {
+              ev.stopPropagation();
+              navigator.clipboard.writeText(diffText).then(() => { cpDiffBtn.textContent = '✓'; setTimeout(() => { cpDiffBtn.textContent = '📋 Copy diff'; }, 1200); });
+            };
+            const rollbackDiffBtn = el('button', { class: 'btn ghost', style: 'font-size:0.7rem;padding:3px 10px' }, '⏪ Rollback to previous');
+            rollbackDiffBtn.onclick = async (ev) => {
+              ev.stopPropagation();
+              if (!c.old_sha) { alert('No previous version available.'); return; }
+              if (!confirm(`Rollback ${dev.hostname} to version ${c.old_sha.slice(0,8)} (before this change)?`)) return;
+              rollbackDiffBtn.disabled = true; rollbackDiffBtn.textContent = 'Applying…';
+              try {
+                await api('POST', `/devices/${dev.id}/rollback`, { target_sha: c.old_sha });
+                rollbackDiffBtn.textContent = '✓ Applied';
+              } catch (err) { rollbackDiffBtn.textContent = '✗ Failed'; alert(err.message); }
+              setTimeout(() => { rollbackDiffBtn.disabled = false; rollbackDiffBtn.textContent = '⏪ Rollback to previous'; }, 3000);
+            };
+            diffActions.append(dlDiffBtn, cpDiffBtn, rollbackDiffBtn);
+            diffContent.appendChild(diffActions);
+
+            // Render diff content
+            const diffRenderArea = el('div');
+            diffContent.appendChild(diffRenderArea);
             if (viewMode === 'side-by-side') {
-              activeChangePositions = renderSideBySideDiff(diffText, diffContent);
+              activeChangePositions = renderSideBySideDiff(diffText, diffRenderArea);
             } else {
-              activeChangePositions = renderUnifiedDiff(diffText, diffContent);
+              activeChangePositions = renderUnifiedDiff(diffText, diffRenderArea);
             }
             currentChangeIdx = -1;
             navBar.hidden = activeChangePositions.length === 0;

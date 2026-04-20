@@ -871,6 +871,27 @@ pre.config {
 .ctx-sidebar .run-row { display:flex; justify-content:space-between; align-items:center; padding:4px 0; border-bottom:1px solid var(--border-default); font-size:var(--font-size-xs); }
 .ctx-sidebar .config-pre { font-family:var(--font-config, var(--font-mono)); font-size:0.7rem; background:var(--surface-sunken); border-radius:var(--radius-sm); padding:8px; overflow:auto; max-height:200px; white-space:pre; }
 
+/* ===== Backup version cards (slide-over Backups tab) ===== */
+.backup-version-card { border:1px solid var(--border-default); border-radius:var(--radius-sm); margin-bottom:8px; overflow:hidden; }
+.backup-version-card .bv-header {
+  display:flex; align-items:center; gap:8px; padding:8px 12px; cursor:pointer;
+  font-size:var(--font-size-xs); background:var(--surface-card); transition:background 0.15s;
+}
+.backup-version-card .bv-header:hover { background:var(--surface-sunken); }
+.backup-version-card .bv-date { flex:1; }
+.backup-version-card .bv-sha { font-family:var(--font-mono); font-size:0.65rem; color:var(--text-muted); }
+.backup-version-card .bv-error { color:var(--status-bad); }
+.backup-version-card .bv-expand { padding:0 12px 12px; }
+.backup-version-card .bv-actions {
+  display:flex; gap:6px; flex-wrap:wrap; padding:8px 0; border-bottom:1px solid var(--border-default); margin-bottom:8px;
+}
+.backup-version-card .bv-actions .btn { font-size:0.7rem; padding:4px 10px; }
+.backup-version-card .bv-config-pre {
+  font-family:var(--font-config, var(--font-mono)); font-size:0.7rem;
+  background:#0d1117; color:#c9d1d9; padding:12px; border-radius:var(--radius-sm);
+  overflow:auto; max-height:60vh; white-space:pre; line-height:1.5;
+}
+
 /* ===== Diff viewer improvements ===== */
 .diff-line { font-family:var(--font-config, var(--font-mono)); font-size:0.75rem; white-space:pre; padding:1px 8px; line-height:1.5; }
 .diff-add { background:#e6ffed; color:#1a7f37; }
