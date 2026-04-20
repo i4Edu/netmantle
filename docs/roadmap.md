@@ -96,7 +96,8 @@ block the 1.0‑RC1 tag.
 
 ### Post‑RC1 follow‑ups
 
-- ~~**Automation `Apply()` live execution** — per‑driver push path (Phase 6).~~ ✅ Shipped: transport-routed executor (SSH/NETCONF/RESTCONF/gNMI) wired in `cmd/netmantle/main.go`.
+- ~~**Automation `Apply()` live execution** — per‑driver push path (Phase 6).~~ ✅ Partially shipped: SSH/CLI transport executor wired in `cmd/netmantle/main.go`. RESTCONF, gNMI, and NETCONF transports currently only expose read (get-config) paths — applying rendered templates via those transports is a post-RC1 follow-up.
+- **RESTCONF / gNMI / NETCONF `Apply()` paths** — write/edit-config operations for model-driven transports (currently read-only for backup/capture).
 - **HA chaos/scale validation** — gRPC session chaos tests, 1 000+ concurrent
   device scale validation (Phase 9 follow‑up).
 - **Additional rule packs** — Junos/Nokia/Huawei compliance baselines, UI

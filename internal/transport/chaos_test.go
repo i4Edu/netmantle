@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"net"
 	"net/http"
@@ -166,7 +167,10 @@ func TestRESTCONFChaos(t *testing.T) {
 
 	t.Run("server closes connection mid-response", func(t *testing.T) {
 		t.Parallel()
-		srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Use NewUnstartedServer + force HTTP/1.1 so http.Hijacker is always
+		// available in the handler. httptest.NewTLSServer includes "h2" in
+		// NextProtos which prevents Hijack on HTTP/2 connections.
+		srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			hj, ok := w.(http.Hijacker)
 			if !ok {
 				http.Error(w, "hijack not supported", http.StatusInternalServerError)
@@ -186,6 +190,10 @@ func TestRESTCONFChaos(t *testing.T) {
 			))
 			conn.Close()
 		}))
+		// Restrict to HTTP/1.1 only — excludes "h2" so the server never
+		// upgrades to HTTP/2, guaranteeing Hijack support.
+		srv.TLS = &tls.Config{NextProtos: []string{"http/1.1"}}
+		srv.StartTLS()
 		defer srv.Close()
 
 		sess, _, err := DialRESTCONF(context.Background(), RESTCONFConfig{

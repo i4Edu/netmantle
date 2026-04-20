@@ -268,21 +268,23 @@ func runServe(argv []string) error {
 		if d.CredentialID == nil {
 			return "", fmt.Errorf("automation: device %q (id %d) has no credential", d.Hostname, d.ID)
 		}
+		// RESTCONF, gNMI, and NETCONF transports expose only read (get-config)
+		// paths today. Passing a rendered template to Run() would return
+		// "unsupported command" and risk echoing the full config payload in the
+		// error string. Return a clear error instead so operators get actionable
+		// feedback. A real edit-config / set path is a post-RC1 follow-up.
+		driverLower := strings.ToLower(d.Driver)
+		switch {
+		case strings.Contains(driverLower, "restconf"):
+			return "", fmt.Errorf("automation: live apply is not supported for RESTCONF devices (read-only transport); use an SSH/CLI driver for push jobs")
+		case strings.Contains(driverLower, "gnmi"):
+			return "", fmt.Errorf("automation: live apply is not supported for gNMI devices (read-only transport); use an SSH/CLI driver for push jobs")
+		case strings.Contains(driverLower, "netconf"):
+			return "", fmt.Errorf("automation: live apply is not supported for NETCONF devices (read-only transport); use an SSH/CLI driver for push jobs")
+		}
 		var output string
 		err := credRepo.Use(ctx, d.TenantID, *d.CredentialID, func(user, pw string) error {
-			driverLower := strings.ToLower(d.Driver)
-			var factory func(context.Context, devices.Device, string, string) (drivers.Session, func() error, error)
-			switch {
-			case strings.Contains(driverLower, "restconf"):
-				factory = restconfFactory
-			case strings.Contains(driverLower, "gnmi"):
-				factory = gnmiFactory
-			case strings.Contains(driverLower, "netconf"):
-				factory = netconfFactory
-			default:
-				factory = sessionFactory
-			}
-			sess, closer, serr := factory(ctx, d, user, pw)
+			sess, closer, serr := sessionFactory(ctx, d, user, pw)
 			if serr != nil {
 				return serr
 			}

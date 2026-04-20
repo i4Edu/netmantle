@@ -15,9 +15,12 @@ persistence, container and Helm packaging, signed releases, and an SBOM with
 every tag.
 
 > **Status:** 1.0‑RC1. Phases 0–10 of the project plan are landed, including
-> native RESTCONF / gNMI transports, gRPC+mTLS distributed‑poller listener,
-> the full driver pack, and **automation `Apply()` live execution** (transport-routed
-> push path). Remaining hardening items (HA chaos/scale validation) are tracked in
+> native RESTCONF / gNMI transport integration, gRPC+mTLS distributed‑poller
+> listener, the full driver pack, and **automation `Apply()` live execution**
+> for SSH/CLI drivers. RESTCONF, gNMI, and NETCONF are wired for native
+> transport/capture flows in this release, but are not yet general-purpose
+> automation apply paths. Remaining hardening items (HA chaos/scale
+> validation) are tracked in
 > [`docs/roadmap.md`](docs/roadmap.md). The V1 API surface is now frozen —
 > see [SECURITY.md](SECURITY.md) for the current security posture.
 
