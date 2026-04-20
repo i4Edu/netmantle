@@ -133,4 +133,26 @@ func TestEvaluateDeviceHonorsGroupScopedRules(t *testing.T) {
 	if len(findings) != 2 {
 		t.Fatalf("expected 2 findings, got %d", len(findings))
 	}
+	statusByRule := map[int64]string{}
+	for _, f := range findings {
+		statusByRule[f.RuleID] = f.Status
+	}
+	var (
+		groupRuleID  int64
+		globalRuleID int64
+	)
+	if err := svc.DB.QueryRow(`SELECT id FROM compliance_rules WHERE tenant_id=? AND name='group-only' AND group_id=?`,
+		tid, gid).Scan(&groupRuleID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.DB.QueryRow(`SELECT id FROM compliance_rules WHERE tenant_id=? AND name='global-only' AND group_id IS NULL`,
+		tid).Scan(&globalRuleID); err != nil {
+		t.Fatal(err)
+	}
+	if statusByRule[groupRuleID] != "pass" {
+		t.Fatalf("expected group rule %d to pass, got %q", groupRuleID, statusByRule[groupRuleID])
+	}
+	if statusByRule[globalRuleID] != "fail" {
+		t.Fatalf("expected global rule %d to fail, got %q", globalRuleID, statusByRule[globalRuleID])
+	}
 }

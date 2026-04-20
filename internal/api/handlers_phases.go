@@ -484,12 +484,7 @@ func (s *server) handleSetGroupRulePackAssignments(w http.ResponseWriter, r *htt
 		for _, tmpl := range pack.Rules {
 			if _, err := tx.ExecContext(r.Context(), `
                 INSERT INTO compliance_rules(tenant_id, group_id, name, kind, pattern, severity, description, created_at)
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT DO UPDATE SET
-                    kind=excluded.kind,
-                    pattern=excluded.pattern,
-                    severity=excluded.severity,
-                    description=excluded.description`,
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
 				u.TenantID, groupID, tmpl.Name, tmpl.Kind, tmpl.Pattern, tmpl.Severity, tmpl.Description, now); err != nil {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return

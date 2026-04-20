@@ -78,17 +78,35 @@ func (s *Service) UpsertRule(ctx context.Context, r Rule) (Rule, error) {
 	}
 	r.Severity = defaultSeverity(r.Severity)
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.DB.ExecContext(ctx, `
-        INSERT INTO compliance_rules(tenant_id, group_id, name, kind, pattern, severity, description, created_at)
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT DO UPDATE SET
-            kind = excluded.kind,
-            pattern = excluded.pattern,
-            severity = excluded.severity,
-            description = excluded.description`,
-		r.TenantID, r.GroupID, r.Name, r.Kind, r.Pattern, r.Severity, r.Description, now)
+	var (
+		res sql.Result
+		err error
+	)
+	if r.GroupID == nil {
+		res, err = s.DB.ExecContext(ctx, `
+            UPDATE compliance_rules
+            SET kind=?, pattern=?, severity=?, description=?
+            WHERE tenant_id=? AND name=? AND group_id IS NULL`,
+			r.Kind, r.Pattern, r.Severity, r.Description, r.TenantID, r.Name)
+	} else {
+		res, err = s.DB.ExecContext(ctx, `
+            UPDATE compliance_rules
+            SET kind=?, pattern=?, severity=?, description=?
+            WHERE tenant_id=? AND name=? AND group_id=?`,
+			r.Kind, r.Pattern, r.Severity, r.Description, r.TenantID, r.Name, *r.GroupID)
+	}
 	if err != nil {
 		return Rule{}, err
+	}
+	updated, _ := res.RowsAffected()
+	if updated == 0 {
+		_, err = s.DB.ExecContext(ctx, `
+            INSERT INTO compliance_rules(tenant_id, group_id, name, kind, pattern, severity, description, created_at)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+			r.TenantID, r.GroupID, r.Name, r.Kind, r.Pattern, r.Severity, r.Description, now)
+		if err != nil {
+			return Rule{}, err
+		}
 	}
 	// Fetch back the upserted row to return the canonical ID.
 	var id int64
