@@ -225,26 +225,26 @@ type delayedWireJobs struct {
 	reportDelay time.Duration
 }
 
-func (d delayedWireJobs) Claim(ctx context.Context, tenantID, pollerID int64, supportedTypes []poller.JobType) (poller.Job, error) {
-	if d.claimDelay > 0 {
+func (dw delayedWireJobs) Claim(ctx context.Context, tenantID, pollerID int64, supportedTypes []poller.JobType) (poller.Job, error) {
+	if dw.claimDelay > 0 {
 		select {
 		case <-ctx.Done():
 			return poller.Job{}, ctx.Err()
-		case <-time.After(d.claimDelay):
+		case <-time.After(dw.claimDelay):
 		}
 	}
-	return d.delegate.Claim(ctx, tenantID, pollerID, supportedTypes)
+	return dw.delegate.Claim(ctx, tenantID, pollerID, supportedTypes)
 }
 
-func (d delayedWireJobs) CompleteClaimedBy(ctx context.Context, tenantID, pollerID, jobID int64, success bool, resultJSON, errMsg string) error {
-	if d.reportDelay > 0 {
+func (dw delayedWireJobs) CompleteClaimedBy(ctx context.Context, tenantID, pollerID, jobID int64, success bool, resultJSON, errMsg string) error {
+	if dw.reportDelay > 0 {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(d.reportDelay):
+		case <-time.After(dw.reportDelay):
 		}
 	}
-	return d.delegate.CompleteClaimedBy(ctx, tenantID, pollerID, jobID, success, resultJSON, errMsg)
+	return dw.delegate.CompleteClaimedBy(ctx, tenantID, pollerID, jobID, success, resultJSON, errMsg)
 }
 
 func newWireChaosHarness(t *testing.T) (*sql.DB, *poller.WireService, *poller.Service, *poller.JobService) {

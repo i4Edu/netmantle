@@ -336,12 +336,22 @@ func nullable(s string) any {
 	return s
 }
 
-func (s *Service) recordHighPriorityRollbackScaffold(ctx context.Context, tenantID int64, d devices.Device, applyErr string) {
-	if s == nil || s.Audit == nil {
+func (s *Service) recordHighPriorityRollbackScaffold(ctx context.Context, tenantID int64, d devices.Device, applyErrMsg string) {
+	if s.Audit == nil {
 		return
 	}
-	detail := fmt.Sprintf("priority=high rollback=scaffold status=manual_required error=%s", applyErr)
+	detail := fmt.Sprintf("priority=high rollback=scaffold status=manual_required error=%s", sanitizeAuditError(applyErrMsg))
 	s.Audit.Record(ctx, tenantID, 0, audit.SourceSystem, "automation.apply.rollback_scaffold", fmt.Sprintf("device:%d", d.ID), detail)
+}
+
+func sanitizeAuditError(msg string) string {
+	msg = strings.ReplaceAll(msg, "\n", " ")
+	msg = strings.ReplaceAll(msg, "\r", " ")
+	const maxLen = 160
+	if len(msg) > maxLen {
+		msg = msg[:maxLen] + "..."
+	}
+	return msg
 }
 
 // Compile-time check that we use drivers somewhere (executor signature).
