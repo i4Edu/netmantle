@@ -1,17 +1,13 @@
-// NetMantle SPA — vanilla JS, hash-based router, no build step.
-//
-// Layout:
-//   1. tiny api() helper
-//   2. theme handling (light/dark + manual override in localStorage)
-//   3. session refresh
-//   4. router that maps #/<route> to a render function in `views`
-//   5. per-view modules: Inventory, Backups (changes + diff), Compliance
-//      (rules + findings), Topology (LLDP/CDP nodes & links), Approvals
-//      (change-request queue), Audit (filtered log), Settings (tenants,
-//      tokens, channels, rules, pollers).
+// NetMantle — Enterprise NMS SPA
+// Vanilla JS, hash-router, no build step, no frameworks.
+// Enterprise-grade: high-density tables, proper state, clean architecture.
 
+'use strict';
+
+// ===== Utilities =====
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+const escHTML = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 const api = async (method, path, body) => {
   const opts = { method, credentials: 'same-origin', headers: {} };
@@ -22,60 +18,72 @@ const api = async (method, path, body) => {
   const r = await fetch('/api/v1' + path, opts);
   if (!r.ok) {
     let msg = r.statusText;
-    try { msg = (await r.json()).error || msg; } catch (_) { /* ignore */ }
+    try { msg = (await r.json()).error || msg; } catch (_) {}
     throw new Error(msg);
   }
   if (r.status === 204) return null;
   const ct = r.headers.get('content-type') || '';
-  return ct.includes('application/json') ? r.json() : r.text();
+  return ct.includes('json') ? r.json() : r.text();
 };
 
-// ---------- elements ----------
-const escapeHTML = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
-  (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
-const el = (tag, attrs = {}, ...children) => {
+function el(tag, attrs = {}, ...children) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
     if (v == null || v === false) continue;
     if (k === 'class') e.className = v;
     else if (k === 'html') e.innerHTML = v;
-    else if (k.startsWith('on') && typeof v === 'function') {
-      e.addEventListener(k.slice(2), v);
-    } else if (v === true) e.setAttribute(k, '');
+    else if (k.startsWith('on') && typeof v === 'function') e.addEventListener(k.slice(2), v);
+    else if (v === true) e.setAttribute(k, '');
     else e.setAttribute(k, v);
   }
   for (const c of children.flat()) {
     if (c == null) continue;
-    e.appendChild(c.nodeType ? c : document.createTextNode(c));
+    e.appendChild(c.nodeType ? c : document.createTextNode(String(c)));
   }
   return e;
-};
-
-// ---------- theme ----------
-const THEME_KEY = 'netmantle.theme';
-
-function applyTheme(theme) {
-  if (theme === 'light' || theme === 'dark') {
-    document.documentElement.setAttribute('data-theme', theme);
-  } else {
-    document.documentElement.removeAttribute('data-theme');
-  }
 }
 
+function toast(msg, type = 'info') {
+  const t = el('div', { class: `toast ${type}` }, msg);
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 3500);
+}
+
+function timeAgo(dateStr) {
+  if (!dateStr) return '—';
+  const d = new Date(dateStr);
+  const s = Math.floor((Date.now() - d) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+  return Math.floor(s / 86400) + 'd ago';
+}
+
+function fmtDate(dateStr) {
+  if (!dateStr) return '—';
+  const d = new Date(dateStr);
+  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) +
+    ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
+// ===== Theme =====
+const THEME_KEY = 'netmantle.theme';
+function applyTheme(theme) {
+  if (theme === 'light' || theme === 'dark') document.documentElement.setAttribute('data-theme', theme);
+  else document.documentElement.removeAttribute('data-theme');
+}
 function currentTheme() {
-  const stored = localStorage.getItem(THEME_KEY);
-  if (stored === 'light' || stored === 'dark') return stored;
+  const s = localStorage.getItem(THEME_KEY);
+  if (s === 'light' || s === 'dark') return s;
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
-
 function initTheme() {
-  applyTheme(localStorage.getItem(THEME_KEY)); // honour explicit choice if present
+  applyTheme(localStorage.getItem(THEME_KEY));
   const btn = $('#theme-toggle');
   const label = $('#theme-toggle-label');
-  const refresh = () => { label.textContent = currentTheme() === 'dark' ? 'Light' : 'Dark'; };
+  const refresh = () => { if (label) label.textContent = currentTheme() === 'dark' ? 'Light' : 'Dark'; };
   refresh();
-  btn.addEventListener('click', () => {
+  if (btn) btn.addEventListener('click', () => {
     const next = currentTheme() === 'dark' ? 'light' : 'dark';
     localStorage.setItem(THEME_KEY, next);
     applyTheme(next);
@@ -83,13 +91,12 @@ function initTheme() {
   });
 }
 
-// ---------- session ----------
+// ===== Session =====
 let me = null;
 
 async function refreshSession() {
   try {
     me = await api('GET', '/auth/me');
-    window._me = me;
     $('#nav').hidden = false;
     $('#login-view').hidden = true;
     $('#app-view').hidden = false;
@@ -105,8 +112,17 @@ async function refreshSession() {
   }
 }
 
-// ---------- router ----------
-const ROUTES = ['dashboard', 'inventory', 'backups', 'compliance', 'automation', 'topology', 'approvals', 'audit', 'settings', 'zones', 'search', 'notifications', 'users'];
+async function refreshApprovalsBadge() {
+  try {
+    const crs = await api('GET', '/change-requests');
+    const pending = (crs || []).filter(c => c.status === 'submitted').length;
+    const badge = $('#approvals-badge');
+    if (badge) { badge.hidden = pending === 0; badge.textContent = pending; }
+  } catch (_) {}
+}
+
+// ===== Router =====
+const ROUTES = ['dashboard','inventory','zones','automation','compliance','search','users','approvals','audit','settings'];
 
 function currentRoute() {
   const h = (location.hash || '').replace(/^#\/?/, '');
@@ -116,24 +132,23 @@ function currentRoute() {
 
 function router() {
   const route = currentRoute();
-  for (const a of $$('.sidebar a[data-route]')) {
-    a.classList.toggle('active', a.dataset.route === route);
-  }
+  for (const a of $$('.sidebar a[data-route]')) a.classList.toggle('active', a.dataset.route === route);
   const view = $('#view');
   view.innerHTML = '';
-  const fn = views[route] || views.inventory;
-  fn(view);
+  const fn = views[route];
+  if (fn) fn(view);
 }
 
 window.addEventListener('hashchange', router);
 
-// Sidebar collapse toggle
+// ===== Init =====
 document.addEventListener('DOMContentLoaded', () => {
-  const sb = document.getElementById('sidebar');
-  const toggle = document.getElementById('sidebar-toggle');
+  initTheme();
+
+  // Sidebar toggle
+  const sb = $('#sidebar'), toggle = $('#sidebar-toggle');
   if (toggle && sb) {
-    const saved = localStorage.getItem('nm.sidebar.collapsed');
-    if (saved === 'true') sb.dataset.collapsed = 'true';
+    if (localStorage.getItem('nm.sidebar.collapsed') === 'true') sb.dataset.collapsed = 'true';
     toggle.addEventListener('click', () => {
       const next = sb.dataset.collapsed !== 'true';
       sb.dataset.collapsed = String(next);
@@ -141,3762 +156,1581 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Slide-over close
-  const overlay = document.getElementById('slideover-overlay');
-  const slideoverEl = document.getElementById('device-slideover');
-  const closeBtn = document.getElementById('slideover-close');
-  function closeSlideOver() {
-    if (slideoverEl) slideoverEl.hidden = true;
-    if (overlay) overlay.hidden = true;
-  }
-  if (overlay) overlay.addEventListener('click', closeSlideOver);
-  if (closeBtn) closeBtn.addEventListener('click', closeSlideOver);
+  // Slideover
+  const overlay = $('#slideover-overlay'), slideEl = $('#device-slideover'), closeBtn = $('#slideover-close');
+  const closeSlideover = () => { if (slideEl) slideEl.hidden = true; if (overlay) overlay.hidden = true; };
+  if (overlay) overlay.addEventListener('click', closeSlideover);
+  if (closeBtn) closeBtn.addEventListener('click', closeSlideover);
 
-  // Slide-over tab switching
-  const tabsContainer = document.getElementById('slideover-tabs');
-  if (tabsContainer) {
-    tabsContainer.addEventListener('click', (e) => {
-      const tab = e.target.closest('.slideover-tab');
-      if (!tab) return;
-      $$('.slideover-tab', tabsContainer).forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      if (window._currentSlideoverDev) {
-        renderSlideoverTab(window._currentSlideoverDev, tab.dataset.tab);
-      }
-    });
-  }
+  // Slideover tabs
+  const tabsC = $('#slideover-tabs');
+  if (tabsC) tabsC.addEventListener('click', e => {
+    const tab = e.target.closest('.slideover-tab');
+    if (!tab) return;
+    $$('.slideover-tab', tabsC).forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    if (window._slideoverDevice) renderSlideoverTab(window._slideoverDevice, tab.dataset.tab);
+  });
 
-  // Topbar global search → navigate to Config Search
-  const topbarSearch = document.getElementById('topbar-search');
-  if (topbarSearch) {
-    topbarSearch.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && topbarSearch.value.trim()) {
-        window._globalSearchQuery = topbarSearch.value.trim();
-        location.hash = '#/search';
-        topbarSearch.blur();
-      }
-    });
-  }
-});
-
-// ===========================================================
-// Views
-// ===========================================================
-const views = {};
-
-// ---------- Inventory (keeps original device CRUD + backup + runs) ----------
-let currentDeviceId = null;
-
-views.inventory = (root) => {
-  // Page header with actions
-  root.appendChild(el('div', { class: 'page-header' },
-    el('div', { class: 'page-header-left' },
-      el('div', { class: 'page-header-breadcrumb' }, 'Core Operations'),
-      el('div', { class: 'page-header-title' }, 'Devices')),
-    el('div', { class: 'page-header-actions' },
-      el('button', { class: 'btn', id: 'add-dev-toggle' }, '+ Add device'),
-      el('button', { class: 'btn ghost', id: 'add-cred-toggle' }, '+ Credential'),
-      el('button', { class: 'btn ghost', id: 'bulk-backup-btn', hidden: true }, '⚡ Backup selected'),
-      el('button', { class: 'btn ghost', id: 'bulk-export-btn', hidden: true }, '📥 Export selected'))));
-
-  const toolbar = el('div', { class: 'inv-toolbar' },
-    el('input', { type: 'search', id: 'dev-search', placeholder: 'Search: hostname, IP, or vendor:mikrotik status:fail tag:core …' }),
-    el('select', { id: 'dev-group-filter' },
-      el('option', { value: '' }, 'All drivers')),
-    el('select', { id: 'dev-tag-filter' },
-      el('option', { value: '' }, 'All tags')),
-    el('select', { id: 'dev-status-filter' },
-      el('option', { value: '' }, 'All status'),
-      el('option', { value: 'ok' }, '🟢 Healthy'),
-      el('option', { value: 'fail' }, '🔴 Failed'),
-      el('option', { value: 'never' }, '⚪ Never backed up')),
-    el('select', { id: 'dev-pagesize' },
-      el('option', { value: '50' }, '50/page'),
-      el('option', { value: '100' }, '100/page'),
-      el('option', { value: '0' }, 'All')),
-  );
-
-  let allDevices = [], allFindings = [], ruleCount = 0, lastBackups = {}, backupStatus = {};
-  let selectedIds = new Set();
-  let currentPage = 0;
-
-  const addDevSection = el('div', { id: 'add-dev-section', hidden: true, class: 'card', style: 'margin-bottom:12px' },
-    buildAddDeviceForm(() => loadAll()));
-  const addCredSection = el('div', { id: 'add-cred-section', hidden: true, class: 'card', style: 'margin-bottom:12px' },
-    buildAddCredentialForm());
-
-  const tableWrap = el('div', { class: 'table-wrapper' });
-  const statsBar = el('div', { class: 'inv-stats', id: 'dev-stats' });
-
-  root.append(toolbar, addDevSection, addCredSection, statsBar, tableWrap);
-
-  root.querySelector('#add-dev-toggle').onclick = () => {
-    addDevSection.hidden = !addDevSection.hidden;
-    loadAux();
-  };
-  root.querySelector('#add-cred-toggle').onclick = () => {
-    addCredSection.hidden = !addCredSection.hidden;
-  };
-  root.querySelector('#bulk-backup-btn').onclick = async () => {
-    if (!selectedIds.size) return;
-    for (const id of selectedIds) {
-      try { await api('POST', `/devices/${id}/backup`); } catch (_) {}
+  // Global search
+  const topSearch = $('#topbar-search');
+  if (topSearch) topSearch.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && topSearch.value.trim()) {
+      window._searchQuery = topSearch.value.trim();
+      location.hash = '#/search';
+      topSearch.blur();
     }
-    selectedIds.clear();
-    updateBulkBar();
-    await loadAll();
-  };
-  root.querySelector('#bulk-export-btn').onclick = () => {
-    openExportModal([...selectedIds]);
-  };
+  });
 
-  function updateBulkBar() {
-    const show = selectedIds.size > 0;
-    root.querySelector('#bulk-backup-btn').hidden = !show;
-    root.querySelector('#bulk-export-btn').hidden = !show;
-    if (show) {
-      root.querySelector('#bulk-backup-btn').textContent = `⚡ Backup ${selectedIds.size} selected`;
-      root.querySelector('#bulk-export-btn').textContent = `📥 Export ${selectedIds.size} selected`;
-    }
-  }
-
-  function parseSearch(q) {
-    const filters = {};
-    const words = [];
-    for (const part of q.split(/\s+/)) {
-      const m = part.match(/^(\w+):(.+)$/);
-      if (m) filters[m[1].toLowerCase()] = m[2].toLowerCase();
-      else if (part) words.push(part.toLowerCase());
-    }
-    return { filters, text: words.join(' ') };
-  }
-
-  async function renderTable() {
-    const rawQ = ($('#dev-search') || { value: '' }).value;
-    const grp = ($('#dev-group-filter') || { value: '' }).value;
-    const tagFilter = ($('#dev-tag-filter') || { value: '' }).value;
-    const statusFilter = ($('#dev-status-filter') || { value: '' }).value;
-    const pageSize = Number(($('#dev-pagesize') || { value: '50' }).value);
-    const { filters, text } = parseSearch(rawQ);
-
-    let devs = allDevices.filter(d => {
-      if (grp && d.driver !== grp) return false;
-      if (tagFilter && !(d.tags || []).includes(tagFilter) && d.group_name !== tagFilter) return false;
-      if (filters.vendor && !d.driver.toLowerCase().includes(filters.vendor)) return false;
-      if (filters.driver && !d.driver.toLowerCase().includes(filters.driver)) return false;
-      if (filters.ip && !d.address.includes(filters.ip)) return false;
-      if (filters.tag && !(d.tags || []).some(t => t.toLowerCase().includes(filters.tag)) && !(d.group_name || '').toLowerCase().includes(filters.tag)) return false;
-      if (filters.status) {
-        const st = backupStatus[d.id] || 'never';
-        if (filters.status !== st) return false;
-      }
-      if (statusFilter) {
-        const st = backupStatus[d.id] || 'never';
-        if (statusFilter !== st) return false;
-      }
-      if (text && !(d.hostname.toLowerCase().includes(text) ||
-                    d.driver.toLowerCase().includes(text) ||
-                    d.address.includes(text))) return false;
-      return true;
-    });
-
-    const totalFiltered = devs.length;
-
-    // Pagination
-    if (pageSize > 0) {
-      const maxPage = Math.max(0, Math.ceil(devs.length / pageSize) - 1);
-      if (currentPage > maxPage) currentPage = maxPage;
-      devs = devs.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
-    }
-
-    const failByDev = {}, passByDev = {};
-    for (const f of allFindings) {
-      if (f.status === 'pass') passByDev[f.device_id] = (passByDev[f.device_id] || 0) + 1;
-      if (f.status === 'fail') failByDev[f.device_id] = (failByDev[f.device_id] || 0) + 1;
-    }
-
-    const tbl = el('table', { class: 'device-table' });
-    const selectAllCb = el('input', { type: 'checkbox', id: 'select-all-cb' });
-    selectAllCb.onchange = () => {
-      const cbs = tableWrap.querySelectorAll('input.row-cb');
-      cbs.forEach(cb => { cb.checked = selectAllCb.checked; });
-      selectedIds.clear();
-      if (selectAllCb.checked) devs.forEach(d => selectedIds.add(d.id));
-      updateBulkBar();
-    };
-
-    const thead = el('thead', {},
-      el('tr', {},
-        el('th', { style: 'width:32px' }, selectAllCb),
-        el('th', { style: 'width:36px' }, ''),
-        el('th', {}, 'Hostname'),
-        el('th', {}, 'Driver'),
-        el('th', {}, 'Address'),
-        el('th', {}, 'Last Backup'),
-        el('th', {}, 'Compliance'),
-        el('th', { style: 'width:130px' }, 'Actions'),
-      ));
-    const tbody = el('tbody');
-
-    for (const d of devs) {
-      const fails = failByDev[d.id] || 0;
-      const passes = passByDev[d.id] || 0;
-      const evaluated = fails + passes;
-      const score = evaluated > 0 ? Math.round((passes * 100) / evaluated) : null;
-      const lb = lastBackups[d.id] || '—';
-      const st = backupStatus[d.id] || 'never';
-      const dotCls = st === 'ok' ? 'status-dot ok pulse' : st === 'fail' ? 'status-dot bad' : 'status-dot';
-
-      const cb = el('input', { type: 'checkbox', class: 'row-cb', value: String(d.id) });
-      cb.checked = selectedIds.has(d.id);
-      cb.onchange = (e) => {
-        e.stopPropagation();
-        if (cb.checked) selectedIds.add(d.id); else selectedIds.delete(d.id);
-        updateBulkBar();
-      };
-
-      const quickActions = el('div', { class: 'quick-actions' },
-        el('button', { class: 'qa-btn', title: 'Backup now' }, '⚡'),
-        el('button', { class: 'qa-btn', title: 'SSH Terminal' }, '🖥'),
-        el('button', { class: 'qa-btn', title: 'View history' }, '📋'),
-        el('button', { class: 'qa-btn', title: 'Delete' }, '🗑'),
-      );
-      quickActions.children[0].onclick = async (e) => {
-        e.stopPropagation();
-        quickActions.children[0].textContent = '…';
-        try { await api('POST', `/devices/${d.id}/backup`); await loadAll(); }
-        catch (err) { alert('Backup failed: ' + err.message); }
-        quickActions.children[0].textContent = '⚡';
-      };
-      quickActions.children[1].onclick = (e) => {
-        e.stopPropagation();
-        // Open SSH terminal in slide-over log tab
-        openSlideOver(d);
-        setTimeout(() => {
-          const logTab = document.querySelector('.slideover-tab[data-tab="log"]');
-          if (logTab) logTab.click();
-        }, 100);
-      };
-      quickActions.children[2].onclick = (e) => { e.stopPropagation(); openSlideOver(d); };
-      quickActions.children[3].onclick = async (e) => {
-        e.stopPropagation();
-        if (!confirm(`Delete ${d.hostname}?`)) return;
-        try { await api('DELETE', `/devices/${d.id}`); await loadAll(); } catch (err) { alert(err.message); }
-      };
-
-      const compBadge = score == null ? el('span', { class: 'muted', style: 'font-size:0.7rem' }, '—')
-        : el('span', { class: 'badge ' + (score >= 90 ? 'ok' : score >= 60 ? 'warn' : 'bad'), style: 'font-size:0.65rem' }, score + '%');
-
-      const tr = el('tr', { 'data-id': d.id },
-        el('td', { onclick: (e) => e.stopPropagation() }, cb),
-        el('td', {}, el('span', { class: dotCls })),
-        el('td', {}, el('strong', { style: 'font-size:0.8rem' }, escapeHTML(d.hostname))),
-        el('td', {}, el('code', { style: 'font-size:0.7rem;color:var(--text-muted)' }, escapeHTML(d.driver))),
-        el('td', { style: 'font-family:var(--font-mono);font-size:0.75rem' }, `${escapeHTML(d.address)}:${d.port}`),
-        el('td', { style: 'font-size:0.75rem' }, lb),
-        el('td', {}, compBadge),
-        el('td', {}, quickActions),
-      );
-      tr.onclick = () => openSlideOver(d);
-      tbody.appendChild(tr);
-    }
-    tbl.append(thead, tbody);
-    tableWrap.innerHTML = '';
-    tableWrap.appendChild(tbl);
-
-    // Pagination controls
-    if (pageSize > 0 && totalFiltered > pageSize) {
-      const maxPage = Math.ceil(totalFiltered / pageSize) - 1;
-      const pager = el('div', { class: 'pagination-bar' },
-        el('button', { class: 'btn ghost pg-btn', disabled: currentPage === 0 }, '← Prev'),
-        el('span', { class: 'pg-info' }, `Page ${currentPage + 1} of ${maxPage + 1} (${totalFiltered} devices)`),
-        el('button', { class: 'btn ghost pg-btn', disabled: currentPage >= maxPage }, 'Next →'));
-      pager.children[0].onclick = () => { if (currentPage > 0) { currentPage--; renderTable(); } };
-      pager.children[2].onclick = () => { if (currentPage < maxPage) { currentPage++; renderTable(); } };
-      tableWrap.appendChild(pager);
-    }
-
-    // Stats bar
-    const okCount = allDevices.filter(d => backupStatus[d.id] === 'ok').length;
-    const failCount = allDevices.filter(d => backupStatus[d.id] === 'fail').length;
-    const statsEl = $('#dev-stats');
-    if (statsEl) {
-      statsEl.innerHTML = '';
-      statsEl.append(
-        el('span', {}, `${devs.length} device${devs.length === 1 ? '' : 's'}`),
-        el('span', { class: 'badge ok', style: 'margin-left:8px;font-size:0.65rem' }, `${okCount} healthy`),
-        failCount ? el('span', { class: 'badge bad', style: 'margin-left:4px;font-size:0.65rem' }, `${failCount} failed`) : null,
-      );
-    }
-  }
-
-  async function loadAll() {
-    [allDevices, allFindings, ruleCount] = await Promise.all([
-      api('GET', '/devices').catch(() => []),
-      api('GET', '/compliance/findings').catch(() => []),
-      safeCount('/compliance/rules'),
-    ]);
-    const driverSel = $('#dev-group-filter');
-    if (driverSel) {
-      const drivers = [...new Set(allDevices.map(d => d.driver))].sort();
-      driverSel.innerHTML = '<option value="">All drivers</option>';
-      for (const dr of drivers) driverSel.appendChild(el('option', { value: dr }, dr));
-    }
-    // Populate tags/groups filter
-    const tagSel = $('#dev-tag-filter');
-    if (tagSel) {
-      const tags = new Set();
-      for (const d of allDevices) {
-        if (d.group_name) tags.add(d.group_name);
-        if (d.tags) for (const t of d.tags) tags.add(t);
-      }
-      tagSel.innerHTML = '<option value="">All tags</option>';
-      for (const t of [...tags].sort()) tagSel.appendChild(el('option', { value: t }, t));
-    }
-    await Promise.all(allDevices.map(async (d) => {
-      try {
-        const runs = await api('GET', `/devices/${d.id}/runs`);
-        const latest = (runs || [])[0];
-        if (!latest) { lastBackups[d.id] = '—'; backupStatus[d.id] = 'never'; return; }
-        lastBackups[d.id] = relativeTime(new Date(latest.started_at));
-        backupStatus[d.id] = latest.status === 'success' ? 'ok' : 'fail';
-      } catch (_) { lastBackups[d.id] = '—'; backupStatus[d.id] = 'never'; }
-    }));
-    renderTable();
-  }
-
-  $('#dev-search')?.addEventListener('input', () => { currentPage = 0; renderTable(); });
-  $('#dev-group-filter')?.addEventListener('change', () => { currentPage = 0; renderTable(); });
-  $('#dev-tag-filter')?.addEventListener('change', () => { currentPage = 0; renderTable(); });
-  $('#dev-status-filter')?.addEventListener('change', () => { currentPage = 0; renderTable(); });
-  $('#dev-pagesize')?.addEventListener('change', () => { currentPage = 0; renderTable(); });
-
-  loadAll();
-};
-
-function buildAddDeviceForm(onCreated) {
-  const form = el('form', { id: 'add-device-form' },
-    el('label', {}, 'Hostname ', el('input', { name: 'hostname', required: true })),
-    el('label', {}, 'Address ', el('input', { name: 'address', required: true })),
-    el('label', {}, 'Port ', el('input', { name: 'port', type: 'number', value: '22' })),
-    el('label', {}, 'Driver ',
-      el('select', { name: 'driver', id: 'driver-select', required: true })),
-    el('label', {}, 'Credential ',
-      el('select', { name: 'credential_id', id: 'cred-select' })),
-    el('button', { type: 'submit' }, 'Create'),
-  );
-  form.addEventListener('submit', async (e) => {
+  // Login form
+  const loginForm = $('#login-form');
+  if (loginForm) loginForm.addEventListener('submit', async e => {
     e.preventDefault();
-    const fd = new FormData(form);
-    const body = {
-      hostname: fd.get('hostname'),
-      address: fd.get('address'),
-      port: Number(fd.get('port') || 22),
-      driver: fd.get('driver'),
-    };
-    const cid = fd.get('credential_id');
-    if (cid) body.credential_id = Number(cid);
+    const fd = new FormData(loginForm);
     try {
-      await api('POST', '/devices', body);
-      form.reset();
-      if (onCreated) await onCreated(); else await loadDevices();
-    } catch (err) { alert('Create failed: ' + err.message); }
+      const res = await api('POST', '/auth/login', { username: fd.get('username'), password: fd.get('password') });
+      if (res && res.mfa_required) {
+        loginForm.hidden = true;
+        $('#mfa-step').hidden = false;
+        window._mfaToken = res.mfa_token;
+      } else {
+        await refreshSession();
+      }
+    } catch (err) { $('#login-error').textContent = err.message; }
   });
-  return form;
-}
 
-function buildAddCredentialForm(onCreated) {
-  const form = el('form', { id: 'add-cred-form' },
-    el('label', {}, 'Name ', el('input', { name: 'name', required: true })),
-    el('label', {}, 'Username ', el('input', { name: 'username', required: true })),
-    el('label', {}, 'Password ', el('input', { name: 'secret', type: 'password', required: true })),
-    el('button', { type: 'submit' }, 'Save'),
-  );
-  form.addEventListener('submit', async (e) => {
+  // MFA form
+  const mfaForm = $('#mfa-form');
+  if (mfaForm) mfaForm.addEventListener('submit', async e => {
     e.preventDefault();
-    const fd = new FormData(form);
+    const code = new FormData(mfaForm).get('code');
     try {
-      await api('POST', '/credentials', {
-        name: fd.get('name'),
-        username: fd.get('username'),
-        secret: fd.get('secret'),
-      });
-      form.reset();
-      await loadAux();
-      onCreated?.();
-    } catch (err) { alert('Save failed: ' + err.message); }
-  });
-  return form;
-}
-
-async function loadAux() {
-  const drivers = await api('GET', '/drivers');
-  const sel = $('#driver-select'); if (!sel) return;
-  sel.innerHTML = '';
-  for (const d of drivers) {
-    sel.appendChild(el('option', { value: d }, d));
-  }
-  const creds = await api('GET', '/credentials');
-  const csel = $('#cred-select'); if (!csel) return;
-  csel.innerHTML = '<option value="">— none —</option>';
-  for (const c of creds) {
-    csel.appendChild(el('option', { value: c.id }, `${c.name} (${c.username})`));
-  }
-}
-
-async function loadDevices() {
-  const list = await api('GET', '/devices');
-  const ul = $('#devices'); if (!ul) return;
-  ul.innerHTML = '';
-  if (!list.length) {
-    ul.appendChild(el('li', { class: 'muted' }, 'No devices yet — add one below.'));
-    renderDeviceCards(list);
-    return;
-  }
-  for (const d of list) {
-    const li = el('li', { 'data-id': d.id }, `${d.hostname} (${d.driver})`);
-    if (d.id === currentDeviceId) li.classList.add('active');
-    li.onclick = () => showDevice(d.id);
-    ul.appendChild(li);
-  }
-  renderDeviceCards(list);
-}
-
-// renderDeviceCards renders the device-card grid above the split-pane list.
-//
-// Each card surfaces hostname, driver, last backup time, compliance score,
-// and quick read-only actions (Open, Diff). Mutating actions (e.g. backup)
-// remain on the device-detail pane to keep the proposal/audit invariants.
-async function renderDeviceCards(devices) {
-  const host = $('#device-cards');
-  if (!host) return;
-  host.innerHTML = '';
-  if (!devices.length) {
-    host.appendChild(el('p', { class: 'muted' }, 'No devices yet.'));
-    return;
-  }
-  // Pull compliance findings + latest backup time for score/last-seen overlay.
-  let findings = [];
-  try { findings = await api('GET', '/compliance/findings'); } catch (_) {}
-  const ruleCount = await safeCount('/compliance/rules');
-  const failByDev = {}, passByDev = {};
-  for (const f of findings) {
-    if (f.status === 'pass') passByDev[f.device_id] = (passByDev[f.device_id] || 0) + 1;
-    if (f.status === 'fail') failByDev[f.device_id] = (failByDev[f.device_id] || 0) + 1;
-  }
-
-  // Fan out the per-device "last successful backup" lookups in parallel so
-  // card rendering does not block on N sequential network round-trips.
-  const lastBackupByDev = {};
-  await Promise.all(devices.map(async (d) => {
-    try {
-      const runs = await api('GET', `/devices/${d.id}/runs`);
-      const ok = (runs || []).find((r) => r.status === 'success');
-      if (ok) lastBackupByDev[d.id] = relativeTime(new Date(ok.started_at));
-    } catch (_) { /* ignore */ }
-  }));
-
-  for (const d of devices) {
-    const fails = failByDev[d.id] || 0;
-    const passes = passByDev[d.id] || 0;
-    const evaluated = fails + passes;
-    const score = evaluated > 0 ? Math.round((passes * 100) / evaluated) : null;
-    // Pass `ruleCount > 0` (not `evaluated > 0`) so a device that has not
-    // yet been evaluated still classifies as "compliant" when rules exist
-    // — matches the topology overlay's contract.
-    const { cls, label: status } = complianceStatus(fails, ruleCount > 0);
-    const lastBackup = lastBackupByDev[d.id] || '—';
-
-    const card = el('div', { class: 'card device-card', 'data-id': d.id },
-      el('div', { class: 'row' },
-        el('span', { class: 'hostname' }, d.hostname),
-        el('span', { style: 'flex:1' }),
-        el('span', { class: 'badge ' + cls }, status)),
-      el('div', { class: 'meta' }, `${d.address} · ${d.driver}`),
-      el('div', { class: 'meta' }, `Last backup: ${lastBackup}`),
-      el('div', {},
-        el('div', { class: 'meta' }, score == null
-          ? `Compliance: — (${ruleCount} rule${ruleCount === 1 ? '' : 's'} configured)`
-          : `Compliance: ${score}%`),
-        el('div', { class: 'compl-track' },
-          el('div', { class: 'fill ' + cls, style: `width:${score == null ? 0 : score}%` }))),
-      el('div', { class: 'footer' },
-        el('span', {}, `cred ${d.credential_id ? '#' + d.credential_id : '—'}`),
-        el('span', {}, '#' + d.id)),
-    );
-    card.onclick = () => showDevice(d.id);
-    host.appendChild(card);
-  }
-}
-
-async function safeCount(path) {
-  try { const r = await api('GET', path); return Array.isArray(r) ? r.length : 0; }
-  catch (_) { return 0; }
-}
-
-function relativeTime(date) {
-  const sec = Math.max(0, (Date.now() - date.getTime()) / 1000);
-  if (sec < 60) return Math.floor(sec) + 's ago';
-  if (sec < 3600) return Math.floor(sec / 60) + 'm ago';
-  if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
-  return Math.floor(sec / 86400) + 'd ago';
-}
-
-async function showDevice(id) {
-  currentDeviceId = id;
-  for (const li of $$('#devices li')) {
-    li.classList.toggle('active', Number(li.dataset.id) === id);
-  }
-  const dev = await api('GET', `/devices/${id}`);
-  const detail = $('#device-detail');
-  detail.innerHTML = '';
-  detail.appendChild(el('h2', {}, dev.hostname));
-  detail.appendChild(el('p', { class: 'muted' }, `${dev.driver} • ${dev.address}:${dev.port}`));
-
-  const backupBtn = el('button', { class: 'btn' }, 'Backup now');
-  backupBtn.onclick = async () => {
-    backupBtn.disabled = true; backupBtn.textContent = 'Running…';
-    try { await api('POST', `/devices/${id}/backup`); }
-    catch (e) { alert('Backup failed: ' + e.message); }
-    finally {
-      backupBtn.disabled = false; backupBtn.textContent = 'Backup now';
-      showDevice(id);
-    }
-  };
-  const delBtn = el('button', { class: 'btn danger' }, 'Delete');
-  delBtn.onclick = async () => {
-    if (!confirm(`Delete ${dev.hostname}?`)) return;
-    await api('DELETE', `/devices/${id}`);
-    currentDeviceId = null;
-    detail.innerHTML = '<p class="muted">Select a device on the left.</p>';
-    loadDevices();
-  };
-  detail.appendChild(el('div', { class: 'actions' }, backupBtn, delBtn));
-
-  detail.appendChild(el('h3', {}, 'Latest configuration'));
-  try {
-    const cfg = await api('GET', `/devices/${id}/config`);
-    detail.appendChild(el('pre', { class: 'config' }, cfg));
-  } catch (_) {
-    detail.appendChild(el('p', { class: 'muted' }, 'No backup yet — click "Backup now".'));
-  }
-
-  detail.appendChild(el('h3', {}, 'Recent runs'));
-  const runs = await api('GET', `/devices/${id}/runs`);
-  if (!runs.length) {
-    detail.appendChild(el('p', { class: 'muted' }, 'No runs yet.'));
-    return;
-  }
-  const table = el('table', { class: 'data' });
-  table.innerHTML = '<thead><tr><th>Started</th><th>Status</th><th>Commit</th><th>Error</th></tr></thead>';
-  const tbody = el('tbody');
-  for (const r of runs) {
-    tbody.appendChild(el('tr', {},
-      el('td', {}, new Date(r.started_at).toLocaleString()),
-      el('td', { class: 'status-' + r.status }, r.status),
-      el('td', {}, (r.commit_sha || '').slice(0, 8)),
-      el('td', {}, r.error || ''),
-    ));
-  }
-  table.appendChild(tbody);
-  detail.appendChild(table);
-}
-
-// ---------- Contextual sidebar (inventory command center) ----------
-async function showCtxSidebar(dev) {
-  const sidebar = $('#ctx-sidebar');
-  if (!sidebar) return;
-  sidebar.hidden = false;
-  const content = $('#ctx-content');
-  content.innerHTML = '';
-
-  const closeBtn = el('button', { class: 'close-btn', title: 'Close' }, '×');
-  closeBtn.style.cssText = 'position:absolute;top:12px;right:12px;background:none;border:none;cursor:pointer;font-size:1.4rem;color:var(--text-muted)';
-  closeBtn.onclick = () => { sidebar.hidden = true; };
-  sidebar.style.position = 'relative';
-
-  content.append(
-    closeBtn,
-    el('h3', {}, escapeHTML(dev.hostname)),
-    el('p', { class: 'muted', style: 'font-size:var(--font-size-xs);margin:0 0 12px' },
-      `${escapeHTML(dev.driver)} · ${escapeHTML(dev.address)}:${dev.port}`),
-  );
-
-  const bkBtn = el('button', { class: 'btn', style: 'width:100%;margin-bottom:12px' }, '⚡ Backup Now');
-  bkBtn.onclick = async () => {
-    bkBtn.disabled = true; bkBtn.textContent = 'Running…';
-    try { await api('POST', `/devices/${dev.id}/backup`); bkBtn.textContent = '✓ Done'; }
-    catch (e) { bkBtn.textContent = '✗ Failed'; alert(e.message); }
-    setTimeout(() => { bkBtn.disabled = false; bkBtn.textContent = '⚡ Backup Now'; }, 2000);
-    loadRunsSection();
-  };
-  content.appendChild(bkBtn);
-
-  const runsSection = el('div');
-  content.appendChild(runsSection);
-  runsSection.appendChild(el('h3', {}, 'Recent Runs'));
-
-  async function loadRunsSection() {
-    let runRows = runsSection.querySelector('.runs-list');
-    if (!runRows) {
-      runRows = el('div', { class: 'runs-list' });
-      runsSection.appendChild(runRows);
-    }
-    runRows.innerHTML = '<p style="font-size:var(--font-size-xs);color:var(--text-muted)">Loading…</p>';
-    try {
-      const runs = await api('GET', `/devices/${dev.id}/runs`);
-      runRows.innerHTML = '';
-      for (const r of (runs || []).slice(0, 10)) {
-        const st = r.status === 'success' ? 'ok' : r.status === 'running' ? 'warn' : 'bad';
-        const dt = r.started_at ? relativeTime(new Date(r.started_at)) : '—';
-        runRows.appendChild(el('div', { class: 'run-row' },
-          el('span', { class: 'badge badge-' + st }, r.status),
-          el('span', { style: 'color:var(--text-muted)' }, dt),
-          r.commit_sha ? el('code', { style: 'font-size:0.65rem' }, r.commit_sha.slice(0, 8)) : el('span', {}),
-        ));
-      }
-      if (!runs || !runs.length) {
-        runRows.innerHTML = '<p style="font-size:var(--font-size-xs);color:var(--text-muted)">No runs yet.</p>';
-      }
-    } catch (_) {
-      runRows.innerHTML = '<p style="color:var(--status-bad);font-size:var(--font-size-xs)">Failed to load runs.</p>';
-    }
-  }
-  loadRunsSection();
-
-  const cfgHeader = el('h3', { style: 'margin-top:16px' }, 'Latest Config');
-  const cfgPre = el('pre', { class: 'ctx-sidebar config-pre' }, 'Loading…');
-  content.append(cfgHeader, cfgPre);
-  try {
-    const cfg = await api('GET', `/devices/${dev.id}/config`);
-    cfgPre.textContent = typeof cfg === 'string'
-      ? cfg.slice(0, 2000) + (cfg.length > 2000 ? '\n…' : '')
-      : JSON.stringify(cfg, null, 2);
-  } catch (_) { cfgPre.textContent = 'No config available.'; }
-}
-
-// ---------- Slide-over panel ----------
-async function openSlideOver(dev) {
-  window._currentSlideoverDev = dev;
-  const slideoverEl = document.getElementById('device-slideover');
-  const overlay = document.getElementById('slideover-overlay');
-  if (!slideoverEl) { showCtxSidebar(dev); return; }
-
-  document.getElementById('slideover-title').textContent = dev.hostname;
-  document.getElementById('slideover-sub').textContent = `${dev.driver} · ${dev.address}:${dev.port}`;
-
-  $$('.slideover-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === 'info'));
-
-  slideoverEl.hidden = false;
-  overlay.hidden = false;
-
-  renderSlideoverTab(dev, 'info');
-}
-
-async function renderSlideoverTab(dev, tab) {
-  const body = document.getElementById('slideover-body');
-  if (!body) return;
-  body.innerHTML = '<p class="muted" style="padding:8px">Loading…</p>';
-
-  if (tab === 'info') {
-    body.innerHTML = '';
-    const bkBtn = el('button', { class: 'btn', style: 'width:100%;margin-bottom:16px' }, '⚡ Backup Now');
-    bkBtn.onclick = async () => {
-      bkBtn.disabled = true; bkBtn.textContent = 'Running…';
-      try { await api('POST', `/devices/${dev.id}/backup`); bkBtn.textContent = '✓ Queued'; }
-      catch (e) { bkBtn.textContent = '✗ Failed'; alert(e.message); }
-      setTimeout(() => { bkBtn.disabled = false; bkBtn.textContent = '⚡ Backup Now'; }, 2000);
-    };
-    body.appendChild(bkBtn);
-
-    const rows = [
-      ['Hostname', dev.hostname],
-      ['Driver', dev.driver],
-      ['Address', dev.address],
-      ['Port', String(dev.port || 22)],
-      ['Credential', dev.credential_id ? '#' + dev.credential_id : '—'],
-      ['Device ID', '#' + dev.id],
-    ];
-    const dl = el('dl', { style: 'display:grid;grid-template-columns:140px 1fr;gap:6px 12px;font-size:var(--font-size-sm)' });
-    for (const [k, v] of rows) {
-      dl.append(el('dt', { style: 'font-weight:600;color:var(--text-muted)' }, k), el('dd', { style: 'margin:0' }, escapeHTML(String(v))));
-    }
-    body.appendChild(dl);
-
-    const delBtn = el('button', { class: 'btn danger', style: 'width:100%;margin-top:20px' }, 'Delete device');
-    delBtn.onclick = async () => {
-      if (!confirm(`Delete ${dev.hostname}?`)) return;
-      try {
-        await api('DELETE', '/devices/' + dev.id);
-        document.getElementById('device-slideover').hidden = true;
-        document.getElementById('slideover-overlay').hidden = true;
-        location.hash = '#/inventory';
-        router();
-      } catch (e) { alert(e.message); }
-    };
-    body.appendChild(delBtn);
-
-  } else if (tab === 'backups') {
-    body.innerHTML = '';
-    try {
-      const runs = await api('GET', `/devices/${dev.id}/runs`);
-      if (!runs || !runs.length) { body.innerHTML = '<p class="muted">No backup runs yet.</p>'; return; }
-
-      body.appendChild(el('p', { style: 'font-size:var(--font-size-xs);color:var(--text-muted);margin:0 0 10px' },
-        `${runs.length} backup run(s). Click a row to view config, download, or rollback.`));
-
-      for (const r of runs) {
-        const st = r.status === 'success' ? 'ok' : r.status === 'running' ? 'warn' : 'bad';
-        const dt = r.started_at ? new Date(r.started_at).toLocaleString() : '—';
-        const card = el('div', { class: 'backup-version-card' });
-
-        const header = el('div', { class: 'bv-header' },
-          el('span', { class: 'badge badge-' + st }, r.status),
-          el('span', { class: 'bv-date' }, dt),
-          r.commit_sha ? el('code', { class: 'bv-sha' }, r.commit_sha.slice(0, 8)) : el('span', {}, '—'),
-          r.error ? el('span', { class: 'bv-error', title: r.error }, '⚠') : null);
-
-        const expandArea = el('div', { class: 'bv-expand', hidden: true });
-
-        header.onclick = async () => {
-          if (!expandArea.hidden) { expandArea.hidden = true; return; }
-          // Collapse all other expanded cards
-          body.querySelectorAll('.bv-expand').forEach(e => { e.hidden = true; });
-          expandArea.hidden = false;
-
-          if (expandArea.dataset.loaded) return;
-          expandArea.innerHTML = '<p class="muted" style="font-size:var(--font-size-xs)">Loading config…</p>';
-
-          if (!r.commit_sha || r.status !== 'success') {
-            expandArea.innerHTML = r.error
-              ? `<p class="error" style="font-size:var(--font-size-xs)">Run failed: ${escapeHTML(r.error)}</p>`
-              : '<p class="muted" style="font-size:var(--font-size-xs)">No config snapshot for this run.</p>';
-            expandArea.dataset.loaded = 'true';
-            return;
-          }
-
-          try {
-            const cfg = await api('GET', `/devices/${dev.id}/config?sha=${r.commit_sha}`);
-            const cfgText = typeof cfg === 'string' ? cfg : JSON.stringify(cfg, null, 2);
-            expandArea.innerHTML = '';
-            expandArea.dataset.loaded = 'true';
-
-            // Action buttons
-            const actions = el('div', { class: 'bv-actions' });
-            const dlBtn = el('button', { class: 'btn ghost' }, '💾 Download .cfg');
-            dlBtn.onclick = (e) => {
-              e.stopPropagation();
-              const blob = new Blob([cfgText], { type: 'text/plain' });
-              const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-              a.download = `${dev.hostname}_${r.commit_sha.slice(0,8)}.cfg`; a.click();
-              URL.revokeObjectURL(a.href);
-            };
-            const copyBtn = el('button', { class: 'btn ghost' }, '📋 Copy');
-            copyBtn.onclick = (e) => {
-              e.stopPropagation();
-              navigator.clipboard.writeText(cfgText).then(() => {
-                copyBtn.textContent = '✓ Copied';
-                setTimeout(() => { copyBtn.textContent = '📋 Copy'; }, 1500);
-              });
-            };
-            const rollbackBtn = el('button', { class: 'btn ghost' }, '⏪ Apply this version');
-            rollbackBtn.title = 'Rollback device to this configuration version';
-            rollbackBtn.onclick = async (e) => {
-              e.stopPropagation();
-              if (!confirm(`Apply config from ${dt} (${r.commit_sha.slice(0,8)}) to ${dev.hostname}?\n\nThis will push this configuration to the device.`)) return;
-              rollbackBtn.disabled = true; rollbackBtn.textContent = 'Applying…';
-              try {
-                await api('POST', `/devices/${dev.id}/rollback`, { target_sha: r.commit_sha });
-                rollbackBtn.textContent = '✓ Applied';
-                rollbackBtn.className = 'btn';
-              } catch (err) {
-                rollbackBtn.textContent = '✗ Failed';
-                alert('Rollback failed: ' + err.message);
-              }
-              setTimeout(() => { rollbackBtn.disabled = false; rollbackBtn.textContent = '⏪ Apply this version'; rollbackBtn.className = 'btn ghost'; }, 3000);
-            };
-
-            const diffBtn = el('button', { class: 'btn ghost' }, '📊 Show Diff');
-            diffBtn.onclick = (e) => {
-              e.stopPropagation();
-              // Switch to diffs tab
-              const diffsTab = document.querySelector('.slideover-tab[data-tab="diffs"]');
-              if (diffsTab) diffsTab.click();
-            };
-
-            actions.append(dlBtn, copyBtn, rollbackBtn, diffBtn);
-            expandArea.appendChild(actions);
-
-            // Config preview (large expandable view)
-            const pre = el('pre', { class: 'bv-config-pre' }, escapeHTML(cfgText));
-            expandArea.appendChild(pre);
-          } catch (err) {
-            expandArea.innerHTML = `<p class="error" style="font-size:var(--font-size-xs)">${escapeHTML(err.message)}</p>`;
-            expandArea.dataset.loaded = 'true';
-          }
-        };
-
-        card.append(header, expandArea);
-        body.appendChild(card);
-      }
-
-      // Export toolbar at bottom
-      body.appendChild(exportToolbar(async () => {
-        try { return await api('GET', `/devices/${dev.id}/config`); } catch (_) { return ''; }
-      }));
-    } catch (e) { body.innerHTML = '<p class="error">' + escapeHTML(e.message) + '</p>'; }
-
-  } else if (tab === 'diffs') {
-    body.innerHTML = '';
-
-    // Diff viewer controls
-    const diffControls = el('div', { style: 'display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap' });
-    let viewMode = 'unified'; // unified | side-by-side
-    let mutePatterns = JSON.parse(localStorage.getItem('nm.diff.mute') || '["uptime","\\\\d{4}-\\\\d{2}-\\\\d{2}\\\\s+\\\\d{2}:\\\\d{2}","last-change","bytes","packets"]');
-    let muteEnabled = localStorage.getItem('nm.diff.muteOn') !== 'false';
-
-    const viewToggle = el('div', { style: 'display:flex;border:1px solid var(--border-default);border-radius:var(--radius-sm);overflow:hidden' },
-      el('button', { class: 'diff-mode-btn active', 'data-mode': 'unified' }, 'Unified'),
-      el('button', { class: 'diff-mode-btn', 'data-mode': 'side-by-side' }, 'Side-by-Side'));
-    viewToggle.querySelectorAll('.diff-mode-btn').forEach(btn => {
-      btn.onclick = () => {
-        viewMode = btn.dataset.mode;
-        viewToggle.querySelectorAll('.diff-mode-btn').forEach(b => b.classList.toggle('active', b === btn));
-        // Re-render all open diffs
-        body.querySelectorAll('.diff-content[data-loaded="true"]').forEach(dc => {
-          dc.dataset.loaded = 'false';
-          const hdr = dc.previousElementSibling;
-          if (hdr) hdr.click();
-        });
-      };
-    });
-
-    const muteToggle = el('label', { style: 'display:flex;align-items:center;gap:4px;font-size:var(--font-size-xs);cursor:pointer' },
-      el('input', { type: 'checkbox', checked: muteEnabled }),
-      ' Mute dynamic lines');
-    muteToggle.querySelector('input').onchange = (e) => {
-      muteEnabled = e.target.checked;
-      localStorage.setItem('nm.diff.muteOn', String(muteEnabled));
-    };
-
-    const muteEditBtn = el('button', { class: 'btn ghost', style: 'font-size:var(--font-size-xs);padding:2px 8px' }, '⚙ Patterns');
-    muteEditBtn.onclick = () => {
-      const patterns = prompt('Mute patterns (one regex per line):', mutePatterns.join('\n'));
-      if (patterns !== null) {
-        mutePatterns = patterns.split('\n').map(p => p.trim()).filter(Boolean);
-        localStorage.setItem('nm.diff.mute', JSON.stringify(mutePatterns));
-      }
-    };
-
-    diffControls.append(viewToggle, muteToggle, muteEditBtn);
-    body.appendChild(diffControls);
-
-    function shouldMute(line) {
-      if (!muteEnabled) return false;
-      const clean = line.replace(/^[+-]/, '');
-      return mutePatterns.some(p => { try { return new RegExp(p, 'i').test(clean); } catch (_) { return false; } });
-    }
-
-    function renderUnifiedDiff(diffText, container) {
-      container.innerHTML = '';
-      const lines = diffText.split('\n').slice(0, 500);
-      let changeIndex = 0;
-      const changePositions = [];
-      for (const line of lines) {
-        const muted = shouldMute(line);
-        const cls = line.startsWith('+') && !line.startsWith('+++') ? 'diff-add'
-          : line.startsWith('-') && !line.startsWith('---') ? 'diff-del'
-          : line.startsWith('@@') ? 'diff-hunk' : 'diff-ctx';
-        if (cls === 'diff-add' || cls === 'diff-del') changeIndex++;
-        const div = el('div', { class: 'diff-line ' + cls + (muted ? ' diff-muted' : ''), 'data-change': String(changeIndex) }, escapeHTML(line));
-        if ((cls === 'diff-add' || cls === 'diff-del') && !muted) changePositions.push(div);
-        container.appendChild(div);
-      }
-      return changePositions;
-    }
-
-    function renderSideBySideDiff(diffText, container) {
-      container.innerHTML = '';
-      const lines = diffText.split('\n').slice(0, 500);
-      const table = el('table', { class: 'diff-sbs-table' });
-      const changePositions = [];
-      for (const line of lines) {
-        if (line.startsWith('@@') || line.startsWith('---') || line.startsWith('+++')) {
-          table.appendChild(el('tr', { class: 'diff-hunk-row' },
-            el('td', { colspan: '2', class: 'diff-hunk' }, escapeHTML(line))));
-          continue;
-        }
-        const muted = shouldMute(line);
-        const mutedCls = muted ? ' diff-muted' : '';
-        if (line.startsWith('-') && !line.startsWith('---')) {
-          const tr = el('tr', {},
-            el('td', { class: 'diff-del' + mutedCls }, escapeHTML(line.slice(1))),
-            el('td', { class: 'diff-ctx' + mutedCls }));
-          if (!muted) changePositions.push(tr);
-          table.appendChild(tr);
-        } else if (line.startsWith('+') && !line.startsWith('+++')) {
-          const tr = el('tr', {},
-            el('td', { class: 'diff-ctx' + mutedCls }),
-            el('td', { class: 'diff-add' + mutedCls }, escapeHTML(line.slice(1))));
-          if (!muted) changePositions.push(tr);
-          table.appendChild(tr);
-        } else {
-          table.appendChild(el('tr', {},
-            el('td', { class: 'diff-ctx' }, escapeHTML(line.startsWith(' ') ? line.slice(1) : line)),
-            el('td', { class: 'diff-ctx' }, escapeHTML(line.startsWith(' ') ? line.slice(1) : line))));
-        }
-      }
-      container.appendChild(table);
-      return changePositions;
-    }
-
-    try {
-      const evts = await api('GET', `/changes?device_id=${dev.id}`);
-      if (!evts || !evts.length) { body.innerHTML = '<p class="muted">No config changes recorded yet. Run a backup to detect changes.</p>'; return; }
-
-      // Navigation state
-      let activeChangePositions = [];
-      let currentChangeIdx = -1;
-      const navBar = el('div', { class: 'diff-nav', hidden: true },
-        el('button', { class: 'btn ghost', style: 'font-size:0.7rem;padding:2px 8px' }, '▲ Prev'),
-        el('span', { class: 'diff-nav-info', style: 'font-size:var(--font-size-xs)' }, ''),
-        el('button', { class: 'btn ghost', style: 'font-size:0.7rem;padding:2px 8px' }, '▼ Next'));
-      navBar.children[0].onclick = () => navigateChange(-1);
-      navBar.children[2].onclick = () => navigateChange(1);
-      body.appendChild(navBar);
-
-      function navigateChange(dir) {
-        if (!activeChangePositions.length) return;
-        currentChangeIdx = Math.max(0, Math.min(activeChangePositions.length - 1, currentChangeIdx + dir));
-        navBar.querySelector('.diff-nav-info').textContent = `Change ${currentChangeIdx + 1} of ${activeChangePositions.length}`;
-        activeChangePositions[currentChangeIdx].scrollIntoView({ behavior: 'smooth', block: 'center' });
-        activeChangePositions[currentChangeIdx].classList.add('diff-highlight');
-        setTimeout(() => activeChangePositions[currentChangeIdx]?.classList.remove('diff-highlight'), 1500);
-      }
-
-      for (const c of evts.slice(0, 20)) {
-        const dt = c.created_at ? relativeTime(new Date(c.created_at)) : '—';
-        const addBadge = c.added > 0 ? el('span', { style: 'color:var(--status-ok);font-weight:600;font-size:0.7rem' }, `+${c.added}`) : null;
-        const delBadge = c.removed > 0 ? el('span', { style: 'color:var(--status-bad);font-weight:600;font-size:0.7rem;margin-left:6px' }, `-${c.removed}`) : null;
-        const card = el('div', { class: 'card', style: 'margin-bottom:10px;padding:10px 14px' });
-        const hdr = el('div', { style: 'display:flex;justify-content:space-between;align-items:center;font-size:var(--font-size-xs);cursor:pointer' },
-          el('span', {}, el('strong', {}, dt), addBadge, delBadge),
-          el('code', { style: 'font-size:0.65rem' }, c.new_sha ? c.new_sha.slice(0, 8) : '—'));
-        const diffContent = el('div', { class: 'diff-content', hidden: true, style: 'margin-top:8px;max-height:70vh;overflow-y:auto;border:1px solid var(--border-default);border-radius:var(--radius-sm);padding:4px' });
-        hdr.onclick = async () => {
-          if (!diffContent.hidden && diffContent.dataset.loaded === 'true') { diffContent.hidden = true; navBar.hidden = true; return; }
-          diffContent.innerHTML = '<span class="muted">Loading diff…</span>';
-          diffContent.hidden = false;
-          try {
-            const diffText = await api('GET', `/changes/${c.id}/diff`);
-            diffContent.innerHTML = '';
-            diffContent.dataset.loaded = 'true';
-            if (!diffText || !diffText.trim()) {
-              diffContent.appendChild(el('p', { class: 'muted', style: 'font-size:var(--font-size-xs)' }, 'No diff available.'));
-              navBar.hidden = true;
-              return;
-            }
-
-            // Download and copy buttons for the diff
-            const diffActions = el('div', { style: 'display:flex;gap:6px;margin-bottom:6px;padding:4px 0;border-bottom:1px solid var(--border-default)' });
-            const dlDiffBtn = el('button', { class: 'btn ghost', style: 'font-size:0.7rem;padding:3px 10px' }, '💾 Download diff');
-            dlDiffBtn.onclick = (ev) => {
-              ev.stopPropagation();
-              const blob = new Blob([diffText], { type: 'text/plain' });
-              const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-              a.download = `${dev.hostname}_${(c.new_sha || 'diff').slice(0,8)}.patch`; a.click();
-              URL.revokeObjectURL(a.href);
-            };
-            const cpDiffBtn = el('button', { class: 'btn ghost', style: 'font-size:0.7rem;padding:3px 10px' }, '📋 Copy diff');
-            cpDiffBtn.onclick = (ev) => {
-              ev.stopPropagation();
-              navigator.clipboard.writeText(diffText).then(() => { cpDiffBtn.textContent = '✓'; setTimeout(() => { cpDiffBtn.textContent = '📋 Copy diff'; }, 1200); });
-            };
-            const rollbackDiffBtn = el('button', { class: 'btn ghost', style: 'font-size:0.7rem;padding:3px 10px' }, '⏪ Rollback to previous');
-            rollbackDiffBtn.onclick = async (ev) => {
-              ev.stopPropagation();
-              if (!c.old_sha) { alert('No previous version available.'); return; }
-              if (!confirm(`Rollback ${dev.hostname} to version ${c.old_sha.slice(0,8)} (before this change)?`)) return;
-              rollbackDiffBtn.disabled = true; rollbackDiffBtn.textContent = 'Applying…';
-              try {
-                await api('POST', `/devices/${dev.id}/rollback`, { target_sha: c.old_sha });
-                rollbackDiffBtn.textContent = '✓ Applied';
-              } catch (err) { rollbackDiffBtn.textContent = '✗ Failed'; alert(err.message); }
-              setTimeout(() => { rollbackDiffBtn.disabled = false; rollbackDiffBtn.textContent = '⏪ Rollback to previous'; }, 3000);
-            };
-            diffActions.append(dlDiffBtn, cpDiffBtn, rollbackDiffBtn);
-            diffContent.appendChild(diffActions);
-
-            // Render diff content
-            const diffRenderArea = el('div');
-            diffContent.appendChild(diffRenderArea);
-            if (viewMode === 'side-by-side') {
-              activeChangePositions = renderSideBySideDiff(diffText, diffRenderArea);
-            } else {
-              activeChangePositions = renderUnifiedDiff(diffText, diffRenderArea);
-            }
-            currentChangeIdx = -1;
-            navBar.hidden = activeChangePositions.length === 0;
-            navBar.querySelector('.diff-nav-info').textContent = `${activeChangePositions.length} change(s)`;
-          } catch (e) { diffContent.innerHTML = '<p class="error">' + escapeHTML(e.message) + '</p>'; navBar.hidden = true; }
-        };
-        card.append(hdr, diffContent);
-        body.appendChild(card);
-      }
-    } catch (e) { body.innerHTML = '<p class="error">' + escapeHTML(e.message) + '</p>'; }
-
-  } else if (tab === 'log') {
-    body.innerHTML = '';
-    body.appendChild(el('p', { class: 'muted', style: 'font-size:var(--font-size-sm)' }, 'Raw CLI interaction log for the most recent backup run:'));
-    try {
-      const runs = await api('GET', `/devices/${dev.id}/runs`);
-      const latest = (runs || [])[0];
-      if (!latest) { body.innerHTML = '<p class="muted">No runs yet.</p>'; return; }
-      const logEl = el('pre', { style: 'font-family:var(--font-config,var(--font-mono));font-size:0.72rem;background:#0d1117;color:#c9d1d9;padding:12px;border-radius:var(--radius-md);overflow:auto;max-height:400px;white-space:pre-wrap' });
-      logEl.textContent = latest.log_output || latest.error || '(no log output)';
-      body.appendChild(logEl);
-    } catch (e) { body.innerHTML = '<p class="error">' + escapeHTML(e.message) + '</p>'; }
-  }
-}
-
-// ---------- Audit ----------
-views.audit = (root) => {
-  root.appendChild(el('h2', {}, 'Audit log'));
-
-  const filterBar = el('div', { class: 'filter-bar card' });
-  const mkField = (label, input) =>
-    el('div', { class: 'field' }, el('label', {}, label), input);
-
-  const fUser   = el('input', { type: 'number', min: '1', placeholder: 'user id' });
-  const fAction = el('input', { type: 'text',  placeholder: 'e.g. device.create' });
-  const fTarget = el('input', { type: 'text',  placeholder: 'e.g. device:42' });
-  const fSince  = el('input', { type: 'datetime-local' });
-  const fUntil  = el('input', { type: 'datetime-local' });
-  const fLimit  = el('input', { type: 'number', min: '1', max: '500', value: '100' });
-
-  const apply = el('button', { class: 'btn' }, 'Apply');
-  const clear = el('button', { class: 'btn ghost', type: 'button' }, 'Clear');
-  const csv   = el('button', { class: 'btn ghost', type: 'button' }, 'Export CSV');
-
-  filterBar.append(
-    mkField('User ID', fUser),
-    mkField('Action', fAction),
-    mkField('Target', fTarget),
-    mkField('Since',  fSince),
-    mkField('Until',  fUntil),
-    mkField('Limit',  fLimit),
-    el('div', { class: 'field' }, el('label', {}, '\u00a0'),
-      el('div', { class: 'actions' }, apply, clear, csv)),
-  );
-  root.appendChild(filterBar);
-
-  const results = el('div', { class: 'card', id: 'audit-results' },
-    el('p', { class: 'muted' }, 'Loading…'));
-  root.appendChild(results);
-
-  const localToRFC3339 = (v) => {
-    if (!v) return '';
-    // <input type="datetime-local"> gives "YYYY-MM-DDTHH:MM" in local time.
-    const d = new Date(v);
-    return isNaN(d.getTime()) ? '' : d.toISOString();
-  };
-
-  const load = async () => {
-    const params = new URLSearchParams();
-    if (fUser.value)   params.set('user', fUser.value);
-    if (fAction.value) params.set('action', fAction.value.trim());
-    if (fTarget.value) params.set('target', fTarget.value.trim());
-    const s = localToRFC3339(fSince.value); if (s) params.set('since', s);
-    const u = localToRFC3339(fUntil.value); if (u) params.set('until', u);
-    if (fLimit.value)  params.set('limit', fLimit.value);
-    results.innerHTML = '<p class="muted">Loading…</p>';
-    try {
-      const rows = await api('GET', '/audit?' + params.toString());
-      renderAuditRows(results, rows);
-    } catch (e) {
-      results.innerHTML = '';
-      results.appendChild(el('p', { class: 'error' }, 'Error: ' + e.message));
-    }
-  };
-
-  apply.addEventListener('click', (e) => { e.preventDefault(); load(); });
-  clear.addEventListener('click', () => {
-    fUser.value = ''; fAction.value = ''; fTarget.value = '';
-    fSince.value = ''; fUntil.value = ''; fLimit.value = '100';
-    load();
-  });
-  csv.addEventListener('click', () => {
-    // Build the same query string used by load(), then ask the browser to
-    // download it. credentials:'same-origin' is the default for top-level
-    // navigations so the session cookie travels along.
-    const params = new URLSearchParams();
-    if (fUser.value)   params.set('user', fUser.value);
-    if (fAction.value) params.set('action', fAction.value.trim());
-    if (fTarget.value) params.set('target', fTarget.value.trim());
-    const s = localToRFC3339(fSince.value); if (s) params.set('since', s);
-    const u = localToRFC3339(fUntil.value); if (u) params.set('until', u);
-    if (fLimit.value)  params.set('limit', fLimit.value);
-    params.set('format', 'csv');
-    window.location.href = '/api/v1/audit?' + params.toString();
-  });
-  load();
-};
-
-function renderAuditRows(root, rows) {
-  root.innerHTML = '';
-  if (!rows || !rows.length) {
-    root.appendChild(el('p', { class: 'muted' }, 'No matching audit entries.'));
-    return;
-  }
-  const table = el('table', { class: 'data' });
-  table.innerHTML = '<thead><tr>' +
-    '<th>When</th><th>Actor</th><th>Source</th><th>Action</th>' +
-    '<th>Target</th><th>Detail</th></tr></thead>';
-  const tbody = el('tbody');
-  for (const r of rows) {
-    const when = new Date(r.created_at).toLocaleString();
-    const actor = r.actor_user_id == null ? '—' : '#' + r.actor_user_id;
-    const sourceBadge = r.source
-      ? el('span', { class: 'badge' }, r.source)
-      : el('span', { class: 'muted' }, '—');
-    tbody.appendChild(el('tr', {},
-      el('td', {}, when),
-      el('td', {}, actor),
-      el('td', {}, sourceBadge),
-      el('td', {}, el('code', {}, r.action || '')),
-      el('td', {}, r.target || ''),
-      el('td', {}, r.detail || ''),
-    ));
-  }
-  table.appendChild(tbody);
-  root.appendChild(table);
-}
-
-// ---------- shared helpers ----------
-function emptyState(message) {
-  return el('div', { class: 'card' }, el('p', { class: 'muted' }, message));
-}
-function errorState(message) {
-  return el('div', { class: 'card' }, el('p', { class: 'error' }, message));
-}
-function statusBadgeClass(status) {
-  switch (status) {
-    case 'pass':
-    case 'success':
-    case 'approved':
-    case 'applied':
-      return 'ok';
-    case 'fail':
-    case 'failed':
-    case 'rejected':
-    case 'cancelled':
-      return 'bad';
-    case 'running':
-    case 'submitted':
-    case 'pending':
-      return 'warn';
-    default:
-      return 'info';
-  }
-}
-
-// VIOLATION_THRESHOLD is the number of failing compliance findings at which
-// a device is considered to be in "violation" rather than just "drift".
-// Centralised here so the dashboard, inventory cards and topology canvas
-// classify a device the same way.
-const VIOLATION_THRESHOLD = 3;
-
-// complianceStatus maps a failing-rule count to a (badge-class, label) pair.
-// Used by the inventory cards and the topology side panel.
-function complianceStatus(failingCount, hasRules) {
-  if (!hasRules) return { cls: 'info', label: 'no rules' };
-  if (failingCount === 0) return { cls: 'ok', label: 'compliant' };
-  if (failingCount >= VIOLATION_THRESHOLD) return { cls: 'bad', label: 'violation' };
-  return { cls: 'warn', label: 'drift' };
-}
-
-// ---------- Backups (recent change events with two-pane Git-style diff) ----------
-views.backups = async (root) => {
-  root.appendChild(el('h2', {}, 'Backups & changes'));
-  const layout = el('div', { class: 'inventory' });
-  const left = el('aside', { class: 'list-pane' },
-    el('h2', {}, 'Recent changes'),
-    el('ul', { id: 'changes-list' }));
-  const right = el('article', { id: 'change-detail' },
-    el('p', { class: 'muted' }, 'Select a change on the left to view its diff.'));
-  layout.append(left, right);
-  root.appendChild(layout);
-
-  let rows;
-  try { rows = await api('GET', '/changes'); }
-  catch (e) { left.appendChild(errorState('Error: ' + e.message)); return; }
-
-  const ul = $('#changes-list');
-  ul.innerHTML = '';
-  if (!rows.length) {
-    ul.appendChild(el('li', { class: 'muted' },
-      'No changes recorded yet — run a backup that produces a different config.'));
-    return;
-  }
-  for (const c of rows) {
-    const summary = `device ${c.device_id} • ${c.artifact} • +${c.added_lines}/-${c.removed_lines}`;
-    const li = el('li', { 'data-id': c.id }, summary);
-    li.onclick = () => showChange(c);
-    ul.appendChild(li);
-  }
-};
-
-async function showChange(c) {
-  const detail = $('#change-detail');
-  if (!detail) return;
-  for (const li of $$('#changes-list li')) {
-    li.classList.toggle('active', Number(li.dataset.id) === c.id);
-  }
-  detail.innerHTML = '';
-  detail.appendChild(el('h2', {}, `Change #${c.id}`));
-  detail.appendChild(el('p', { class: 'muted' },
-    `${c.artifact} • device ${c.device_id} • ` +
-    `${new Date(c.created_at).toLocaleString()} • ` +
-    `+${c.added_lines}/-${c.removed_lines}`));
-  const actionsRow = el('div', { class: 'actions' });
-  if (!c.reviewed) {
-    const btn = el('button', { class: 'btn' }, 'Mark reviewed');
-    btn.onclick = async () => {
-      try { await api('POST', `/changes/${c.id}/review`); btn.disabled = true; btn.textContent = 'Reviewed'; }
-      catch (e) { alert('Failed: ' + e.message); }
-    };
-    actionsRow.appendChild(btn);
-  } else {
-    actionsRow.appendChild(el('span', { class: 'badge ok' }, 'reviewed'));
-  }
-  // Rollback always proposes — never applies directly.
-  if (c.device_id && c.old_sha) {
-    const rb = el('button', { class: 'btn ghost' }, 'Propose rollback to previous');
-    rb.onclick = async () => {
-      if (!confirm(`Open a rollback proposal for device #${c.device_id} to commit ${c.old_sha.slice(0,8)}?`)) return;
-      try {
-        await api('POST', `/devices/${c.device_id}/rollback`, {
-          artifact: c.artifact || 'running-config', target_sha: c.old_sha,
-        });
-        alert('Rollback proposal created. See Approvals.');
-        location.hash = '#/approvals';
-      } catch (e) { alert('Failed: ' + e.message); }
-    };
-    actionsRow.appendChild(rb);
-  }
-  detail.appendChild(actionsRow);
-
-  detail.appendChild(el('h3', {}, 'Diff'));
-  try {
-    const d = await api('GET', `/changes/${c.id}/diff`);
-    detail.appendChild(renderTwoPaneDiff(d || ''));
-  } catch (e) {
-    detail.appendChild(el('p', { class: 'error' }, 'Could not load diff: ' + e.message));
-  }
-}
-
-// renderTwoPaneDiff converts a unified diff into a side-by-side Git-style view.
-//
-// The input is the raw unified-diff text returned by /changes/{id}/diff.
-// We parse hunks, then for each hunk fan lines into a left (before) and right
-// (after) column so add/del rows align. Context lines appear in both columns.
-//
-// This is an intentionally minimal renderer: we do not compute intra-line
-// highlights. For the common NCM case (line-level edits) it is dramatically
-// clearer than a single-pane unified diff.
-function renderTwoPaneDiff(text) {
-  const wrap = el('div');
-  wrap.appendChild(el('div', { class: 'diff-toolbar' },
-    el('span', {}, 'Side-by-side diff'),
-    el('span', { class: 'legend' },
-      el('span', { class: 'swatch del' }), 'removed'),
-    el('span', { class: 'legend' },
-      el('span', { class: 'swatch add' }), 'added'),
-    el('label', { style: 'display:inline-flex;gap:4px;align-items:center;cursor:pointer;margin-left:auto' },
-      el('input', { type: 'checkbox', id: 'mute-ts' }),
-      'Mute timestamps')));
-  const pane = el('div', { class: 'diff-twopane' });
-  const left  = el('div', {}, el('div', { class: 'pane-head' }, 'before'));
-  const right = el('div', { class: 'right' }, el('div', { class: 'pane-head' }, 'after'));
-  pane.append(left, right);
-  if (!text) {
-    left.appendChild(el('div', { class: 'diff-row' },
-      el('span', { class: 'ln' }, ''), el('span', { class: 'src muted' }, '(no diff)')));
-    right.appendChild(el('div', { class: 'diff-row' },
-      el('span', { class: 'ln' }, ''), el('span', { class: 'src muted' }, '(no diff)')));
-    wrap.appendChild(pane);
-    return wrap;
-  }
-
-  const row = (col, cls, lnLabel, src) => {
-    col.appendChild(el('div', { class: 'diff-row ' + cls },
-      el('span', { class: 'ln' }, lnLabel == null ? '' : String(lnLabel)),
-      el('span', { class: 'src' }, src)));
-  };
-
-  let lnA = 0, lnB = 0;
-  const lines = text.split(/\r?\n/);
-  // Buffers of pending del/add to align them within a hunk.
-  let dels = [], adds = [];
-  const flush = () => {
-    const n = Math.max(dels.length, adds.length);
-    for (let i = 0; i < n; i++) {
-      if (i < dels.length) {
-        row(left, 'diff-del', ++lnA, dels[i]);
-      } else {
-        row(left, '', '', '');
-      }
-      if (i < adds.length) {
-        row(right, 'diff-add', ++lnB, adds[i]);
-      } else {
-        row(right, '', '', '');
-      }
-    }
-    dels = []; adds = [];
-  };
-
-  // Only treat lines as file/diff headers before we've seen the first hunk.
-  // Once inside a hunk, a `-` or `+` prefix is a real diff line and a `---`
-  // (or `+++`) at column 0 within a config could be legitimate content
-  // (e.g. ASCII separator banners on Cisco IOS) — skipping it would silently
-  // drop config text from the rendered view.
-  let inHunk = false;
-  for (const ln of lines) {
-    if (!inHunk && (
-        /^--- (a\/|\/dev\/null|"a\/)/.test(ln) ||
-        /^\+\+\+ (b\/|\/dev\/null|"b\/)/.test(ln) ||
-        ln.startsWith('diff --git ') ||
-        ln.startsWith('diff -') ||
-        ln.startsWith('index ') ||
-        ln.startsWith('Binary files ') ||
-        ln.startsWith('similarity index ') ||
-        ln.startsWith('rename ') ||
-        ln.startsWith('new file mode ') ||
-        ln.startsWith('deleted file mode '))) {
-      // pre-hunk file/diff headers — skip in the rendered view
-      continue;
-    }
-    if (ln.startsWith('@@')) {
-      inHunk = true;
-      flush();
-      // Parse "@@ -a,b +c,d @@" to reset line counters.
-      const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(ln);
-      if (m) { lnA = Number(m[1]) - 1; lnB = Number(m[2]) - 1; }
-      row(left,  'diff-hunk', '', ln);
-      row(right, 'diff-hunk', '', ln);
-      continue;
-    }
-    if (inHunk && ln.startsWith('+')) { adds.push(ln.slice(1)); continue; }
-    if (inHunk && ln.startsWith('-')) { dels.push(ln.slice(1)); continue; }
-    if (!inHunk) continue; // any other pre-hunk noise
-    // context line (or empty) inside a hunk
-    flush();
-    const ctx = ln.startsWith(' ') ? ln.slice(1) : ln;
-    row(left,  'diff-ctx', ++lnA, ctx);
-    row(right, 'diff-ctx', ++lnB, ctx);
-  }
-  flush();
-
-  // Wire mute-timestamps toggle (filters lines with clock/uptime noise).
-  const muteInput = wrap.querySelector('#mute-ts');
-  if (muteInput) {
-    const TS_PAT = /\b(uptime|last.changed|clock|ntp|timestamp|\d{1,2}:\d{2}:\d{2}|\b(mon|tue|wed|thu|fri|sat|sun)\b)/i;
-    muteInput.addEventListener('change', () => {
-      for (const r of pane.querySelectorAll('.diff-row')) {
-        const src = r.querySelector('.src');
-        if (src && TS_PAT.test(src.textContent)) r.style.display = muteInput.checked ? 'none' : '';
-      }
-    });
-  }
-
-  wrap.appendChild(pane);
-  return wrap;
-}
-
-// ---------- Compliance (rules + findings) ----------
-views.compliance = async (root) => {
-  root.appendChild(el('h2', {}, 'Compliance'));
-
-  const pickerGroup = el('select', { id: 'rulepack-group-select' });
-  const pickerPacks = el('div', { id: 'rulepack-pack-list', class: 'rulepack-picker-list' });
-  const pickerStatus = el('p', { class: 'muted', id: 'rulepack-picker-status' }, 'Loading rule-pack assignments…');
-  const pickerSave = el('button', { type: 'button', class: 'btn' }, 'Save group rule packs');
-  const pickerCard = el('div', { class: 'card' },
-    el('h3', {}, 'Rule-pack picker'),
-    el('p', { class: 'muted' }, 'Select built-in compliance rule packs per device group.'),
-    el('label', {}, 'Device group ', pickerGroup),
-    pickerPacks,
-    el('div', { class: 'actions' }, pickerSave),
-    pickerStatus,
-  );
-  root.appendChild(pickerCard);
-
-  // Add-rule form
-  const form = el('form', { id: 'add-rule-form' },
-    el('label', {}, 'Name ', el('input', { name: 'name', required: true })),
-    el('label', {}, 'Kind ',
-      el('select', { name: 'kind' },
-        el('option', { value: 'must_include' }, 'must_include'),
-        el('option', { value: 'must_exclude' }, 'must_exclude'),
-        el('option', { value: 'regex' }, 'regex'),
-        el('option', { value: 'ordered_block' }, 'ordered_block'))),
-    el('label', {}, 'Pattern ', el('input', { name: 'pattern', required: true })),
-    el('label', {}, 'Severity ',
-      el('select', { name: 'severity' },
-        el('option', { value: 'low' }, 'low'),
-        el('option', { value: 'medium', selected: true }, 'medium'),
-        el('option', { value: 'high' }, 'high'),
-        el('option', { value: 'critical' }, 'critical'))),
-    el('button', { type: 'submit' }, 'Add rule'),
-  );
-  const rulesCard = el('div', { class: 'card' },
-    el('h3', {}, 'Rules'),
-    el('details', {}, el('summary', {}, 'Add rule'), form),
-    el('div', { id: 'rules-table' }, el('p', { class: 'muted' }, 'Loading…')));
-  const findingsCard = el('div', { class: 'card' },
-    el('h3', {}, 'Findings'),
-    el('div', { id: 'findings-table' }, el('p', { class: 'muted' }, 'Loading…')));
-  root.append(rulesCard, findingsCard);
-
-  const pickerState = {
-    groups: [],
-    packs: [],
-    assignments: new Map(),
-  };
-
-  const renderPickerPackList = () => {
-    pickerPacks.innerHTML = '';
-    const gid = Number(pickerGroup.value || 0);
-    if (!gid || !pickerState.packs.length) {
-      pickerPacks.appendChild(el('p', { class: 'muted' }, 'No packs available.'));
-      return;
-    }
-    const selected = new Set(pickerState.assignments.get(gid) || []);
-    for (const p of pickerState.packs) {
-      const id = `pack-${gid}-${p.name}`;
-      const cb = el('input', { type: 'checkbox', id, value: p.name });
-      cb.checked = selected.has(p.name);
-      pickerPacks.appendChild(el('label', { class: 'rulepack-option', for: id },
-        cb,
-        el('span', {},
-          `${p.name} `,
-          el('span', { class: 'muted' }, `(v${p.version}, ${p.rule_count} rules)`)),
-      ));
-    }
-  };
-
-  const loadPicker = async () => {
-    try {
-      const [groups, packs, assignments] = await Promise.all([
-        api('GET', '/device-groups'),
-        api('GET', '/compliance/rulepacks'),
-        api('GET', '/compliance/rulepack-assignments'),
-      ]);
-      pickerState.groups = groups || [];
-      pickerState.packs = packs || [];
-      pickerState.assignments = new Map((assignments || []).map((a) => [a.group_id, a.packs || []]));
-      pickerGroup.innerHTML = '';
-      if (!pickerState.groups.length) {
-        pickerGroup.appendChild(el('option', { value: '' }, 'No groups defined'));
-        pickerSave.disabled = true;
-        pickerStatus.textContent = 'Create a device group to use group-scoped rule packs.';
-        renderPickerPackList();
-        return;
-      }
-      pickerSave.disabled = false;
-      for (const g of pickerState.groups) {
-        pickerGroup.appendChild(el('option', { value: g.id }, g.name));
-      }
-      pickerStatus.textContent = 'Select packs for a group and save.';
-      renderPickerPackList();
-    } catch (e) {
-      pickerStatus.className = 'error';
-      pickerStatus.textContent = 'Rule-pack picker unavailable: ' + e.message;
-      pickerSave.disabled = true;
-    }
-  };
-
-  pickerGroup.addEventListener('change', renderPickerPackList);
-  pickerSave.addEventListener('click', async () => {
-    const gid = Number(pickerGroup.value || 0);
-    if (!gid) return;
-    const selected = $$('#rulepack-pack-list input[type="checkbox"]:checked').map((x) => x.value);
-    pickerSave.disabled = true;
-    try {
-      await api('PUT', `/compliance/rulepack-assignments/${gid}`, { packs: selected });
-      pickerState.assignments.set(gid, selected);
-      pickerStatus.className = 'muted';
-      pickerStatus.textContent = `Saved ${selected.length} pack(s) for group #${gid}.`;
-    } catch (e) {
-      pickerStatus.className = 'error';
-      pickerStatus.textContent = 'Failed to save: ' + e.message;
-    } finally {
-      pickerSave.disabled = false;
-    }
+      await api('POST', '/auth/mfa-verify', { token: window._mfaToken, code });
+      await refreshSession();
+    } catch (err) { $('#mfa-error').textContent = err.message; }
   });
 
-  const renderRules = async () => {
-    const dst = $('#rules-table');
-    if (!dst) return;
-    let rules;
-    try { rules = await api('GET', '/compliance/rules'); }
-    catch (e) { dst.innerHTML = ''; dst.appendChild(el('p', { class: 'error' }, 'Error: ' + e.message)); return; }
-    dst.innerHTML = '';
-    if (!rules.length) { dst.appendChild(el('p', { class: 'muted' }, 'No rules defined yet.')); return; }
-    const t = el('table', { class: 'data' });
-    t.innerHTML = '<thead><tr><th>ID</th><th>Name</th><th>Kind</th><th>Pattern</th><th>Severity</th><th></th></tr></thead>';
-    const tb = el('tbody');
-    for (const r of rules) {
-      const del = el('button', { class: 'btn ghost' }, 'Delete');
-      del.onclick = async () => {
-        if (!confirm('Delete rule ' + r.name + '?')) return;
-        try { await api('DELETE', `/compliance/rules/${r.id}`); renderRules(); }
-        catch (e) { alert('Failed: ' + e.message); }
-      };
-      tb.appendChild(el('tr', {},
-        el('td', {}, String(r.id)),
-        el('td', {}, r.name),
-        el('td', {}, el('code', {}, r.kind)),
-        el('td', {}, el('code', {}, r.pattern)),
-        el('td', {}, el('span', { class: 'badge ' + (r.severity === 'high' || r.severity === 'critical' ? 'bad' : 'info') }, r.severity)),
-        el('td', {}, del),
-      ));
-    }
-    t.appendChild(tb);
-    dst.appendChild(t);
-  };
-
-  const renderFindings = async () => {
-    const dst = $('#findings-table');
-    if (!dst) return;
-    let findings, rules;
-    try {
-      [findings, rules] = await Promise.all([
-        api('GET', '/compliance/findings'),
-        api('GET', '/compliance/rules'),
-      ]);
-    } catch (e) { dst.innerHTML = ''; dst.appendChild(el('p', { class: 'error' }, 'Error: ' + e.message)); return; }
-    dst.innerHTML = '';
-    if (!findings.length) { dst.appendChild(el('p', { class: 'muted' }, 'No findings yet — back up a device with rules defined.')); return; }
-    const ruleByID = new Map((rules || []).map((r) => [r.id, r]));
-    const sevOrder = { critical: 0, high: 1, medium: 2, low: 3 };
-    const groups = new Map();
-    for (const f of findings) {
-      const rule = ruleByID.get(f.rule_id);
-      const sev = (rule && rule.severity) || 'unknown';
-      if (!groups.has(sev)) groups.set(sev, []);
-      groups.get(sev).push({ ...f, _rule: rule });
-    }
-    const sevs = Array.from(groups.keys()).sort(
-      (a, b) => (sevOrder[a] ?? 99) - (sevOrder[b] ?? 99));
-    for (const sev of sevs) {
-      const group = groups.get(sev);
-      dst.appendChild(el('h4', { class: 'finding-group' },
-        el('span', { class: 'badge ' + statusBadgeClass(sev === 'critical' || sev === 'high' ? 'fail' : (sev === 'low' ? 'pass' : 'pending')) }, sev),
-        ' ', String(group.length) + (group.length === 1 ? ' finding' : ' findings')));
-      const t = el('table', { class: 'data' });
-      t.innerHTML = '<thead><tr><th>Device</th><th>Rule</th><th>Status</th><th>Detail</th></tr></thead>';
-      const tb = el('tbody');
-      for (const f of group) {
-        const ruleLabel = f._rule ? `${f._rule.name} (#${f.rule_id})` : '#' + f.rule_id;
-        tb.appendChild(el('tr', {},
-          el('td', {}, '#' + f.device_id),
-          el('td', {}, ruleLabel),
-          el('td', {}, el('span', { class: 'badge ' + statusBadgeClass(f.status) }, f.status)),
-          el('td', {}, f.detail || ''),
-        ));
-      }
-      t.appendChild(tb);
-      dst.appendChild(t);
-    }
-  };
-
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const fd = new FormData(form);
-    try {
-      await api('POST', '/compliance/rules', {
-        name: fd.get('name'), kind: fd.get('kind'),
-        pattern: fd.get('pattern'), severity: fd.get('severity'),
-      });
-      form.reset();
-      renderRules();
-    } catch (err) { alert('Failed: ' + err.message); }
+  // Logout
+  const logoutBtn = $('#logout');
+  if (logoutBtn) logoutBtn.addEventListener('click', async () => {
+    try { await api('POST', '/auth/logout'); } catch (_) {}
+    me = null;
+    location.reload();
   });
 
-  await loadPicker();
-  await renderRules();
-  await renderFindings();
-};
-
-function topologyNodeCountFromLinks(links) {
-  const set = new Set();
-  for (const l of links) { set.add(l.a); set.add(l.b); }
-  return set.size;
-}
-
-// ---------- Topology (interactive SVG canvas with hand-rolled force layout) ----------
-views.topology = async (root) => {
-  root.appendChild(el('div', { class: 'page-header' },
-    el('div', { class: 'page-header-left' },
-      el('div', { class: 'page-header-breadcrumb' }, 'Core Operations'),
-      el('div', { class: 'page-header-title' }, 'Network Topology')),
-    el('div', { class: 'page-header-actions' },
-      el('button', { class: 'btn', id: 'topo-discover-btn' }, '🔍 Run LLDP/CDP Discovery'))));
-
-  // Wire the discovery button.
-  root.querySelector('#topo-discover-btn').onclick = async () => {
-    const btn = root.querySelector('#topo-discover-btn');
-    btn.disabled = true; btn.textContent = '⏳ Running probes…';
-    try {
-      const res = await api('POST', '/topology/discover');
-      const ok = (res.results || []).filter(r => r.status === 'ok').length;
-      const failed = (res.results || []).filter(r => r.status === 'failed').length;
-      btn.textContent = `✓ Done (${ok} ok, ${failed} failed) — reloading…`;
-      setTimeout(() => { router(); }, 1500);
-    } catch (e) {
-      btn.disabled = false; btn.textContent = '🔍 Run LLDP/CDP Discovery';
-      alert('Discovery failed: ' + e.message);
-    }
-  };
-
-  let data;
-  try { data = await api('GET', '/topology'); }
-  catch (e) { root.appendChild(errorState('Error: ' + e.message)); return; }
-  const links = (data && data.links) || [];
-  const nodeCount = Number.isFinite(data?.node_count) ? data.node_count : topologyNodeCountFromLinks(links);
-  const linkCount = Number.isFinite(data?.edge_count) ? data.edge_count : links.length;
-  if (!links.length) {
-    const empty = el('div', { class: 'card', style: 'text-align:center;padding:48px 32px;margin-top:24px' },
-      el('div', { style: 'font-size:3rem;margin-bottom:16px' }, '🗺'),
-      el('h3', { style: 'margin:0 0 8px' }, 'No topology data yet'),
-      el('p', { style: 'color:var(--text-muted);font-size:var(--font-size-sm);margin:0 0 20px;max-width:480px;margin-left:auto;margin-right:auto' },
-        'Click "Run LLDP/CDP Discovery" above to poll all devices for neighbor tables. NetMantle will run ',
-        el('code', {}, 'show lldp neighbors'), ' against each device and build the topology graph automatically.'),
-      el('div', { style: 'display:flex;gap:12px;justify-content:center;flex-wrap:wrap' },
-        el('div', { class: 'card', style: 'padding:12px 20px;min-width:160px' },
-          el('div', { style: 'font-size:1.5rem' }, '📡'), el('div', { style: 'font-size:var(--font-size-sm);margin-top:4px' }, 'LLDP (IEEE 802.1ab)'),
-          el('div', { class: 'muted', style: 'font-size:var(--font-size-xs)' }, 'Cisco, Juniper, Arista, Huawei')),
-        el('div', { class: 'card', style: 'padding:12px 20px;min-width:160px' },
-          el('div', { style: 'font-size:1.5rem' }, '🔗'), el('div', { style: 'font-size:var(--font-size-sm);margin-top:4px' }, 'CDP (Cisco)'),
-          el('div', { class: 'muted', style: 'font-size:var(--font-size-xs)' }, 'Cisco IOS/NX-OS/IOS-XR')),
-        el('div', { class: 'card', style: 'padding:12px 20px;min-width:160px' },
-          el('div', { style: 'font-size:1.5rem' }, '🛰' ), el('div', { style: 'font-size:var(--font-size-sm);margin-top:4px' }, 'MikroTik neighbors'),
-          el('div', { class: 'muted', style: 'font-size:var(--font-size-xs)' }, 'RouterOS /ip neighbor')),
-      ));
-    root.appendChild(empty);
-    return;
-  }
-  // Optional: also load devices so we can colour nodes by compliance.
-  let devices = [], findings = [];
-  try { devices = await api('GET', '/devices'); } catch (_) {}
-  try { findings = await api('GET', '/compliance/findings'); } catch (_) {}
-  // Fetch rule count once so the helper agrees with the Inventory cards.
-  const ruleCount = await safeCount('/compliance/rules');
-  const hasRules = ruleCount > 0;
-  const failsByHost = {};
-  const devByHost = {};
-  const devByID = {};
-  for (const d of devices) {
-    devByHost[d.hostname] = d;
-    devByID[d.id] = d;
-  }
-  for (const f of (findings || [])) {
-    if (f.status !== 'fail') continue;
-    const dev = devByID[f.device_id];
-    if (dev) failsByHost[dev.hostname] = (failsByHost[dev.hostname] || 0) + 1;
-  }
-
-  const wrap = el('div', { class: 'topo-wrap' });
-  const legend = el('div', { class: 'legend' },
-    el('span', {}, el('span', { class: 'dot', style: 'background:var(--status-ok)' }), 'ok'),
-    el('span', {}, el('span', { class: 'dot', style: 'background:var(--status-warn)' }), 'drift'),
-    el('span', {}, el('span', { class: 'dot', style: 'background:var(--status-bad)' }), 'violation'),
-    el('span', {}, el('span', { class: 'dot', style: 'background:var(--text-muted)' }), 'unknown'));
-  wrap.appendChild(legend);
-  const stats = el('div', { class: 'legend topo-stats' },
-    el('span', {}, `${nodeCount} devices`),
-    el('span', {}, `${linkCount} links`),
-  );
-  wrap.appendChild(stats);
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 1000 540');
-  wrap.appendChild(svg);
-  const sidePanel = el('aside', { class: 'side-panel', hidden: true, id: 'topo-side' });
-  wrap.appendChild(sidePanel);
-  root.appendChild(wrap);
-
-  // Build node + edge sets.
-  const nodeNames = new Set();
-  for (const l of links) { nodeNames.add(l.a); nodeNames.add(l.b); }
-  const nodes = [...nodeNames].map((name, i) => {
-    // initial layout: ring (deterministic, no jitter on reload)
-    const angle = (i / nodeNames.size) * Math.PI * 2;
-    return {
-      name,
-      x: 500 + Math.cos(angle) * 200,
-      y: 270 + Math.sin(angle) * 180,
-      vx: 0, vy: 0,
-    };
-  });
-  const idx = Object.fromEntries(nodes.map((n, i) => [n.name, i]));
-  const edges = links.map((l) => ({ a: idx[l.a], b: idx[l.b], aPort: l.a_port, bPort: l.b_port }));
-
-  // Hand-rolled spring layout: ~120 iterations is enough for graphs ≤ 100 nodes.
-  // Repulsion (Coulomb-like) between every pair, attraction (Hooke) along edges.
-  const W = 1000, H = 540, ITER = 200;
-  for (let it = 0; it < ITER; it++) {
-    // Repulsion
-    for (let i = 0; i < nodes.length; i++) {
-      let fx = 0, fy = 0;
-      for (let j = 0; j < nodes.length; j++) {
-        if (i === j) continue;
-        const dx = nodes[i].x - nodes[j].x;
-        const dy = nodes[i].y - nodes[j].y;
-        const dist2 = dx * dx + dy * dy + 0.01;
-        const f = 9000 / dist2;
-        fx += dx * f / Math.sqrt(dist2);
-        fy += dy * f / Math.sqrt(dist2);
-      }
-      nodes[i].vx = (nodes[i].vx + fx) * 0.5;
-      nodes[i].vy = (nodes[i].vy + fy) * 0.5;
-    }
-    // Attraction along edges (target length 130)
-    for (const e of edges) {
-      const A = nodes[e.a], B = nodes[e.b];
-      const dx = B.x - A.x, dy = B.y - A.y;
-      const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
-      const f = (dist - 130) * 0.05;
-      const fx = dx / dist * f, fy = dy / dist * f;
-      A.vx += fx; A.vy += fy;
-      B.vx -= fx; B.vy -= fy;
-    }
-    // Centering & bound
-    for (const n of nodes) {
-      n.vx += (W / 2 - n.x) * 0.001;
-      n.vy += (H / 2 - n.y) * 0.001;
-      n.x += Math.max(-15, Math.min(15, n.vx));
-      n.y += Math.max(-15, Math.min(15, n.vy));
-      n.x = Math.max(40, Math.min(W - 40, n.x));
-      n.y = Math.max(40, Math.min(H - 40, n.y));
-    }
-  }
-
-  // Render edges first so nodes draw on top.
-  for (const e of edges) {
-    const A = nodes[e.a], B = nodes[e.b];
-    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    line.setAttribute('x1', A.x); line.setAttribute('y1', A.y);
-    line.setAttribute('x2', B.x); line.setAttribute('y2', B.y);
-    line.setAttribute('class', 'topo-edge');
-    svg.appendChild(line);
-  }
-  for (const n of nodes) {
-    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    g.setAttribute('class', 'topo-node');
-    g.setAttribute('transform', `translate(${n.x},${n.y})`);
-    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-    circle.setAttribute('r', 10);
-    const f = failsByHost[n.name] || 0;
-    let cls = 'unknown';
-    if (devByHost[n.name]) cls = complianceStatus(f, hasRules).cls;
-    circle.setAttribute('class', cls);
-    const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    t.setAttribute('y', 24);
-    t.textContent = n.name;
-    g.append(circle, t);
-    g.addEventListener('click', () => showTopologyNode(n.name, devByHost[n.name], failsByHost[n.name] || 0, hasRules));
-    svg.appendChild(g);
-  }
-};
-
-function showTopologyNode(name, device, fails, hasRules) {
-  const side = $('#topo-side');
-  if (!side) return;
-  side.hidden = false;
-  side.innerHTML = '';
-  side.appendChild(el('h3', {}, name));
-  if (!device) {
-    side.appendChild(el('p', { class: 'muted' },
-      'Discovered via neighbour reports but not registered as a managed device.'));
-    return;
-  }
-  side.appendChild(el('p', { class: 'muted' },
-    `${device.driver} • ${device.address}:${device.port}`));
-  const { cls, label: status } = complianceStatus(fails, hasRules);
-  side.appendChild(el('p', {}, el('span', { class: 'badge ' + cls }, status),
-    ' ', String(fails) + ' failing rule' + (fails === 1 ? '' : 's')));
-  const open = el('button', { class: 'btn' }, 'Open device →');
-  open.onclick = () => { location.hash = '#/inventory'; setTimeout(() => showDevice(device.id), 50); };
-  const close = el('button', { class: 'btn ghost' }, 'Close');
-  close.onclick = () => { side.hidden = true; };
-  side.appendChild(el('div', { class: 'actions' }, open, close));
-}
-
-// ---------- Approvals (change-request queue) ----------
-views.approvals = async (root) => {
-  root.appendChild(el('h2', {}, 'Approvals'));
-  let rows;
-  try { rows = await api('GET', '/change-requests'); }
-  catch (e) { root.appendChild(errorState('Error: ' + e.message)); return; }
-  if (!rows.length) {
-    root.appendChild(emptyState('No change requests yet.'));
-    return;
-  }
-  const card = el('div', { class: 'card' });
-  const t = el('table', { class: 'data' });
-  t.innerHTML = '<thead><tr><th>ID</th><th>Title</th><th>Kind</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>';
-  const tb = el('tbody');
-  const reload = () => router();
-  for (const r of rows) {
-    const actions = el('span', { class: 'actions' });
-    const mkBtn = (label, cls, op, prompt) => {
-      const b = el('button', { class: 'btn ' + cls }, label);
-      b.onclick = async () => {
-        const body = {};
-        if (prompt) {
-          const reason = window.prompt(prompt + ' (optional)');
-          if (reason === null) return;          // user aborted the prompt
-          if (reason !== '') body.reason = reason;
-        }
-        try { await api('POST', `/change-requests/${r.id}/${op}`, prompt ? body : undefined); reload(); }
-        catch (e) { alert('Failed: ' + e.message); }
-      };
-      return b;
-    };
-    if (r.status === 'draft')      actions.append(mkBtn('Submit', '', 'submit'));
-    if (r.status === 'submitted')  actions.append(mkBtn('Approve', '', 'approve', 'Approval note'),
-                                                  mkBtn('Reject', 'danger', 'reject', 'Rejection reason'));
-    if (r.status === 'approved')   actions.append(mkBtn('Apply', '', 'apply'));
-    if (r.status === 'draft' || r.status === 'submitted')
-      actions.append(mkBtn('Cancel', 'ghost', 'cancel', 'Cancel reason'));
-
-    tb.appendChild(el('tr', {},
-      el('td', {}, '#' + r.id),
-      el('td', {}, r.title),
-      el('td', {}, el('code', {}, r.kind)),
-      el('td', {}, el('span', { class: 'badge ' + statusBadgeClass(r.status) }, r.status)),
-      el('td', {}, new Date(r.created_at).toLocaleString()),
-      el('td', {}, actions),
-    ));
-  }
-  t.appendChild(tb);
-  card.appendChild(t);
-  root.appendChild(card);
-};
-
-// ---------- Automation (Mass Config Push wizard — v2) ----------
-// 5 steps: Create/Select Job → Map Variables → Preflight → Preview → Execute
-
-// --- Config Editor component ---
-function configEditor(initialValue, onChange) {
-  const wrap = el('div', { class: 'config-editor-wrap' });
-  const lineNums = el('div', { class: 'line-numbers' });
-  const ta = el('textarea', { spellcheck: 'false', autocomplete: 'off', autocorrect: 'off' });
-  ta.value = initialValue || '';
-  wrap.append(lineNums, ta);
-
-  function updateLineNumbers() {
-    const count = (ta.value.match(/\n/g) || []).length + 1;
-    lineNums.innerHTML = '';
-    for (let i = 1; i <= count; i++) lineNums.appendChild(el('span', {}, String(i)));
-  }
-
-  ta.addEventListener('input', () => { updateLineNumbers(); onChange?.(ta.value); });
-  ta.addEventListener('scroll', () => { lineNums.scrollTop = ta.scrollTop; });
-  ta.addEventListener('keydown', (e) => {
-    if (e.key === 'Tab') { e.preventDefault(); const s = ta.selectionStart; ta.value = ta.value.substring(0, s) + '  ' + ta.value.substring(ta.selectionEnd); ta.selectionStart = ta.selectionEnd = s + 2; }
-  });
-  updateLineNumbers();
-  return { wrap, textarea: ta, getValue: () => ta.value };
-}
-
-// --- Variable Mapper component ---
-function detectVariables(template) {
-  const vars = new Set();
-  const re = /\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}/g;
-  let m;
-  while ((m = re.exec(template)) !== null) vars.add(m[1]);
-  return [...vars];
-}
-
-function variableMapper(template, devices) {
-  const vars = detectVariables(template);
-  if (!vars.length) return { el: el('p', { class: 'muted', style: 'font-size:var(--font-size-sm)' }, 'No {{variables}} detected in template.'), getMapping: () => ({}) };
-
-  const deviceFields = ['hostname', 'address', 'port', 'driver', 'id'];
-  const container = el('div', { class: 'var-mapper' });
-  container.appendChild(el('div', { class: 'var-mapper-header' },
-    el('span', {}, `${vars.length} variable${vars.length > 1 ? 's' : ''} detected`)));
-
-  const mapping = {};
-  for (const v of vars) {
-    const source = el('select', {},
-      el('option', { value: 'manual' }, 'Manual value'),
-      ...deviceFields.map(f => el('option', { value: 'field:' + f }, 'Device: ' + f)));
-    const manualInp = el('input', { type: 'text', placeholder: 'Enter value…' });
-    source.addEventListener('change', () => {
-      manualInp.hidden = source.value !== 'manual';
-      mapping[v] = { source: source.value, manual: manualInp.value };
-    });
-    manualInp.addEventListener('input', () => {
-      mapping[v] = { source: 'manual', manual: manualInp.value };
-    });
-    mapping[v] = { source: 'manual', manual: '' };
-    container.appendChild(el('div', { class: 'var-mapper-row' },
-      el('span', { class: 'var-name' }, `{{${v}}}`),
-      manualInp, source));
-  }
-
-  return { el: container, getMapping: () => mapping };
-}
-
-// --- Export Utility toolbar ---
-function exportToolbar(getText) {
-  const bar = el('div', { class: 'export-toolbar' });
-  const copyBtn = el('button', { type: 'button' }, '📋 Copy');
-  copyBtn.onclick = () => {
-    navigator.clipboard.writeText(getText()).then(() => { copyBtn.textContent = '✓ Copied'; setTimeout(() => { copyBtn.textContent = '📋 Copy'; }, 1500); });
-  };
-  const dlBtn = el('button', { type: 'button' }, '💾 Download .cfg');
-  dlBtn.onclick = () => {
-    const blob = new Blob([getText()], { type: 'text/plain' });
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-    a.download = 'config.cfg'; a.click(); URL.revokeObjectURL(a.href);
-  };
-  bar.append(copyBtn, dlBtn);
-  return bar;
-}
-
-views.automation = (root) => {
-  root.appendChild(el('div', { class: 'page-header' },
-    el('div', { class: 'page-header-left' },
-      el('div', { class: 'page-header-breadcrumb' }, 'Automation & Intelligence'),
-      el('div', { class: 'page-header-title' }, 'Mass Config Push')),
-    el('div', { class: 'page-header-actions' },
-      el('button', { class: 'btn ghost', id: 'push-export-btn' }, '📥 Export Configs'),
-      el('button', { class: 'btn ghost', id: 'push-schedule-btn' }, '⏰ Schedules'))));
-
-  let step = 0, selectedJob = null, previewResults = [], allDevices = [];
-  let currentTemplate = '', varMapperState = null;
-
-  const STEPS = ['Select Job', 'Variables', 'Pre-flight', 'Preview', 'Execute'];
-  const stepsEl = el('div', { class: 'wizard-steps' });
-  STEPS.forEach((s, i) => stepsEl.appendChild(
-    el('div', { class: 'wizard-step' + (i === 0 ? ' active' : ''), 'data-step': String(i) }, `${i + 1}. ${s}`)));
-  const stepContent = el('div', { class: 'card', style: 'padding:var(--space-5)' });
-  root.append(stepsEl, stepContent);
-
-  // Wire top-bar buttons
-  root.querySelector('#push-export-btn').onclick = () => openExportModal();
-  root.querySelector('#push-schedule-btn').onclick = () => { location.hash = '#/settings'; };
-
-  function setStep(n) {
-    step = n;
-    $$('.wizard-step', stepsEl).forEach((s, i) => {
-      s.classList.toggle('active', i === n);
-      s.classList.toggle('done', i < n);
-    });
-    renderStep();
-  }
-
-  function renderStep() {
-    stepContent.innerHTML = '';
-    [renderJobSelect, renderVariables, renderPreflight, renderPreview, renderExecute][step]();
-  }
-
-  // STEP 0: Select or Create Job
-  async function renderJobSelect() {
-    stepContent.innerHTML = '<p class="muted">Loading…</p>';
-    let jobs = [];
-    try { jobs = await api('GET', '/push/jobs'); } catch (_) {}
-    try { allDevices = await api('GET', '/devices'); } catch (_) { allDevices = []; }
-    stepContent.innerHTML = '';
-
-    const jobList = el('div', { style: 'display:grid;gap:10px;margin-bottom:16px' });
-    for (const j of jobs) {
-      const card = el('div', { class: 'card', style: 'cursor:pointer;border:2px solid transparent;padding:12px 16px' },
-        el('div', { style: 'display:flex;justify-content:space-between;align-items:center' },
-          el('strong', {}, escapeHTML(j.name)),
-          el('div', { style: 'display:flex;gap:6px' },
-            j.safe_mode ? el('span', { class: 'badge ok' }, '🛡 Safe') : null,
-            j.verify_command ? el('span', { class: 'badge info' }, '✓ Verify') : null)),
-        el('p', { class: 'muted', style: 'margin:4px 0 0;font-size:var(--font-size-xs)' },
-          j.target_group_id ? `Group #${j.target_group_id}` : 'All devices'));
-      card.onclick = () => {
-        $$('.card', jobList).forEach(c => c.style.borderColor = 'transparent');
-        card.style.borderColor = 'var(--accent)';
-        selectedJob = j;
-        currentTemplate = j.template || '';
-      };
-      jobList.appendChild(card);
-    }
-    if (!jobs.length) jobList.appendChild(el('p', { class: 'muted' }, 'No push jobs yet. Create one below.'));
-
-    const nextBtn = el('button', { class: 'btn' }, 'Next: Variables →');
-    nextBtn.onclick = () => { if (!selectedJob) { alert('Select a job first.'); return; } setStep(1); };
-    stepContent.append(jobList, nextBtn);
-
-    // Create new job form with config editor
-    const createDet = el('details', { style: 'margin-top:20px' },
-      el('summary', { style: 'cursor:pointer;font-weight:600;font-size:var(--font-size-sm)' }, '+ Create new push job'));
-    const nameInp = el('input', { name: 'name', required: true, placeholder: 'Job name', style: 'width:100%;padding:7px 10px;border:1px solid var(--border-default);border-radius:var(--radius-sm);font-size:var(--font-size-sm);background:var(--surface-card);color:var(--text-default);margin-bottom:8px' });
-    const editor = configEditor('/ip address add address={{customer_ip}} interface=ether1\n# Disable telnet\n/ip service set telnet disabled=yes', (v) => { currentTemplate = v; });
-
-    const safeCheck = el('label', { style: 'display:flex;gap:8px;align-items:center;font-size:var(--font-size-sm);margin-top:8px' },
-      el('input', { type: 'checkbox', name: 'safe_mode' }), ' Enable Safe Mode');
-    const verifyInp = el('input', { type: 'text', placeholder: 'e.g. ping 8.8.8.8 count=1', style: 'width:100%;padding:7px 10px;border:1px solid var(--border-default);border-radius:var(--radius-sm);font-size:var(--font-size-sm);background:var(--surface-card);color:var(--text-default)' });
-    const rollbackEditor = configEditor('# Rollback commands here\n', null);
-
-    const createBtn = el('button', { class: 'btn', style: 'margin-top:12px' }, 'Create Job');
-    createBtn.onclick = async () => {
-      const name = nameInp.value.trim();
-      if (!name) { alert('Name required'); return; }
-      try {
-        const job = await api('POST', '/push/jobs', {
-          name,
-          template: editor.getValue(),
-          safe_mode: safeCheck.querySelector('input').checked,
-          verify_command: verifyInp.value.trim(),
-          rollback_template: rollbackEditor.getValue(),
-        });
-        selectedJob = job;
-        currentTemplate = editor.getValue();
-        createDet.open = false;
-        renderStep();
-      } catch (err) { alert('Create failed: ' + err.message); }
-    };
-
-    createDet.append(
-      el('div', { style: 'margin-top:12px;display:grid;gap:8px' },
-        el('label', { style: 'font-size:var(--font-size-sm);font-weight:600' }, 'Job Name'), nameInp,
-        el('label', { style: 'font-size:var(--font-size-sm);font-weight:600;margin-top:4px' }, 'Template (Vendor CLI)'),
-        el('p', { class: 'muted', style: 'font-size:var(--font-size-xs);margin:0 0 4px' }, 'Use {{variable_name}} for dynamic injection. Supports MikroTik, Cisco, Huawei CLI.'),
-        editor.wrap,
-        safeCheck,
-        el('label', { style: 'font-size:var(--font-size-sm);font-weight:600;margin-top:8px' }, 'Verify Command (optional)'), verifyInp,
-        el('span', { class: 'help' }, 'Runs after push to verify connectivity. Rollback triggers if this fails.'),
-        el('label', { style: 'font-size:var(--font-size-sm);font-weight:600;margin-top:8px' }, 'Rollback Template (optional)'),
-        rollbackEditor.wrap,
-        createBtn));
-    stepContent.appendChild(createDet);
-  }
-
-  // STEP 1: Variable Mapper
-  function renderVariables() {
-    stepContent.innerHTML = '';
-    stepContent.appendChild(el('h3', {}, `Variables — ${escapeHTML(selectedJob.name)}`));
-    const tpl = currentTemplate || selectedJob.template || '';
-    varMapperState = variableMapper(tpl, allDevices);
-    stepContent.appendChild(varMapperState.el);
-
-    const nav = el('div', { style: 'display:flex;gap:8px;margin-top:16px' },
-      el('button', { class: 'btn ghost' }, '← Back'),
-      el('button', { class: 'btn' }, 'Next: Pre-flight →'));
-    nav.children[0].onclick = () => setStep(0);
-    nav.children[1].onclick = () => setStep(2);
-    stepContent.appendChild(nav);
-  }
-
-  // STEP 2: Pre-flight connectivity check
-  async function renderPreflight() {
-    stepContent.innerHTML = '';
-    stepContent.appendChild(el('h3', {}, 'Pre-flight Connectivity Check'));
-    stepContent.appendChild(el('p', { class: 'muted', style: 'font-size:var(--font-size-sm)' }, 'Verifying SSH/Telnet connectivity to target devices…'));
-
-    const grid = el('div', { class: 'preflight-grid' });
-    const summary = el('div', { style: 'margin-top:12px;font-size:var(--font-size-sm)' });
-    stepContent.append(grid, summary);
-
-    let results = [];
-    try {
-      results = (await api('POST', `/push/jobs/${selectedJob.id}/preflight`)).results || [];
-    } catch (e) {
-      // Fallback: show all devices as unchecked
-      for (const d of allDevices) results.push({ device_id: d.id, hostname: d.hostname, reachable: null, error: 'preflight not available' });
-    }
-
-    grid.innerHTML = '';
-    let reachable = 0, unreachable = 0;
-    for (const r of results) {
-      if (r.reachable) reachable++; else unreachable++;
-      grid.appendChild(el('div', { class: 'preflight-row' },
-        el('span', { class: 'pf-dot ' + (r.reachable ? 'ok' : 'bad') }),
-        el('span', {}, escapeHTML(r.hostname || 'Device #' + r.device_id)),
-        el('span', { class: 'pf-latency' }, r.latency_ms ? r.latency_ms + 'ms' : '—'),
-        el('span', { class: 'badge ' + (r.reachable ? 'ok' : 'bad') }, r.reachable ? 'OK' : 'Fail')));
-    }
-    summary.innerHTML = '';
-    summary.append(
-      el('span', { class: 'badge ok', style: 'margin-right:6px' }, `${reachable} reachable`),
-      unreachable ? el('span', { class: 'badge bad' }, `${unreachable} unreachable`) : null);
-
-    const nav = el('div', { style: 'display:flex;gap:8px;margin-top:16px' },
-      el('button', { class: 'btn ghost' }, '← Back'),
-      el('button', { class: 'btn' }, 'Next: Preview →'));
-    nav.children[0].onclick = () => setStep(1);
-    nav.children[1].onclick = () => setStep(3);
-    stepContent.appendChild(nav);
-  }
-
-  // STEP 3: Preview rendered configs
-  async function renderPreview() {
-    stepContent.innerHTML = '<p class="muted">Generating preview…</p>';
-    try {
-      const res = await api('POST', `/push/jobs/${selectedJob.id}/preview`);
-      previewResults = res.results || res || [];
-    } catch (err) {
-      stepContent.innerHTML = `<p class="error">Preview failed: ${escapeHTML(err.message)}</p>`;
-      stepContent.appendChild(el('button', { class: 'btn ghost', onclick: () => setStep(2) }, '← Back'));
-      return;
-    }
-    stepContent.innerHTML = '';
-    stepContent.appendChild(el('h3', {}, `Preview — ${escapeHTML(selectedJob.name)}`));
-    stepContent.appendChild(el('p', { class: 'muted', style: 'font-size:var(--font-size-sm)' },
-      `${previewResults.length} device(s) targeted.`));
-
-    for (const r of previewResults.slice(0, 30)) {
-      const det = el('details', { style: 'margin-bottom:6px;border:1px solid var(--border-default);border-radius:var(--radius-md);overflow:hidden' },
-        el('summary', { style: 'padding:8px 14px;cursor:pointer;font-size:var(--font-size-sm);background:var(--surface-sunken)' },
-          el('strong', {}, escapeHTML(r.hostname || 'unknown'))),
-        el('pre', { class: 'config-view', style: 'border-radius:0;border:none;margin:0' }, escapeHTML(r.rendered || '')));
-      stepContent.appendChild(det);
-    }
-
-    const nav = el('div', { style: 'display:flex;gap:8px;margin-top:16px' },
-      el('button', { class: 'btn ghost' }, '← Back'),
-      el('button', { class: 'btn' }, '⚡ Execute Push'));
-    nav.children[0].onclick = () => setStep(2);
-    nav.children[1].onclick = () => setStep(4);
-    stepContent.appendChild(nav);
-  }
-
-  // STEP 4: Execute with terminal queue
-  async function renderExecute() {
-    stepContent.innerHTML = '';
-    stepContent.appendChild(el('h3', {}, `Executing — ${escapeHTML(selectedJob.name)}`));
-    if (selectedJob.safe_mode) stepContent.appendChild(el('p', { style: 'font-size:var(--font-size-xs);color:var(--status-info)' }, '🛡 Safe Mode — devices will be rolled back if unreachable after push'));
-
-    const total = previewResults.length || allDevices.length || 1;
-    let done = 0, failures = 0;
-
-    // Global progress
-    const progressFill = el('div', { class: 'progress-bar-fill', style: 'width:0%' });
-    const progressPct = el('span', { style: 'font-weight:600;font-size:var(--font-size-sm)' }, '0%');
-    stepContent.appendChild(el('div', { class: 'device-progress', style: 'margin-bottom:12px' },
-      el('div', { class: 'progress-bar-wrap' }, progressFill), progressPct));
-
-    // Terminal queue: device list + console
-    const tq = el('div', { class: 'terminal-queue' });
-    const deviceList = el('div', { class: 'tq-device-list' });
-    const consoleEl = el('div', { class: 'tq-console' });
-    tq.append(deviceList, consoleEl);
-    stepContent.appendChild(tq);
-
-    // Populate device list
-    const deviceItems = {};
-    const deviceLogs = {};
-    for (const r of previewResults) {
-      const key = r.hostname || 'device-' + (r.device_id || Math.random());
-      deviceLogs[key] = [];
-      const item = el('div', { class: 'tq-device-item', 'data-key': key },
-        el('span', { class: 'tq-status pending' }),
-        el('span', {}, escapeHTML(r.hostname || 'Unknown')));
-      item.onclick = () => showDeviceLogs(key);
-      deviceItems[key] = item;
-      deviceList.appendChild(item);
-    }
-
-    let activeKey = null;
-    function showDeviceLogs(key) {
-      activeKey = key;
-      $$('.tq-device-item', deviceList).forEach(i => i.classList.toggle('active', i.dataset.key === key));
-      consoleEl.innerHTML = '';
-      for (const line of (deviceLogs[key] || [])) {
-        consoleEl.appendChild(el('div', { class: 'tq-line ' + (line.cls || '') }, line.text));
-      }
-      consoleEl.scrollTop = consoleEl.scrollHeight;
-    }
-
-    function log(key, text, cls) {
-      if (!deviceLogs[key]) deviceLogs[key] = [];
-      deviceLogs[key].push({ text, cls });
-      if (key === activeKey) {
-        consoleEl.appendChild(el('div', { class: 'tq-line ' + (cls || '') }, text));
-        consoleEl.scrollTop = consoleEl.scrollHeight;
-      }
-    }
-
-    function setDeviceStatus(key, status) {
-      const item = deviceItems[key];
-      if (!item) return;
-      const dot = item.querySelector('.tq-status');
-      if (dot) { dot.className = 'tq-status ' + status; }
-    }
-
-    // Global console log
-    function globalLog(text, cls) {
-      consoleEl.appendChild(el('div', { class: 'tq-line ' + (cls || '') }, text));
-      consoleEl.scrollTop = consoleEl.scrollHeight;
-    }
-
-    globalLog(`[info] Starting push job "${selectedJob.name}" · ${total} device(s)`, 'info');
-    if (selectedJob.safe_mode) globalLog('[info] Safe Mode enabled', 'info');
-    if (selectedJob.verify_command) globalLog(`[info] Verify command: ${selectedJob.verify_command}`, 'info');
-
-    try {
-      const res = await api('POST', `/push/jobs/${selectedJob.id}/run`, { concurrency: 4 });
-      const results = res.results || res || [];
-      for (const r of results) {
-        done++;
-        const pct = Math.round((done / total) * 100);
-        progressFill.style.width = pct + '%';
-        progressPct.textContent = pct + '%';
-        const key = r.hostname || 'device-' + r.device_id;
-
-        if (r.status === 'applied') {
-          setDeviceStatus(key, 'ok');
-          log(key, `[ok] Config applied successfully`, 'ok');
-          globalLog(`[ok]   ${escapeHTML(r.hostname)} — applied`, 'ok');
-        } else if (r.status === 'rolled_back') {
-          failures++;
-          setDeviceStatus(key, 'fail');
-          log(key, `[warn] ROLLED BACK: ${r.error || 'unreachable'}`, 'warn');
-          globalLog(`[warn] ${escapeHTML(r.hostname)} — ROLLED BACK`, 'warn');
-        } else if (r.status === 'failed') {
-          failures++;
-          setDeviceStatus(key, 'fail');
-          log(key, `[fail] ${r.error || 'unknown error'}`, 'err');
-          globalLog(`[fail] ${escapeHTML(r.hostname)} — ${escapeHTML(r.error || 'error')}`, 'err');
-        } else {
-          log(key, `[----] ${r.status}`, '');
-          globalLog(`[----] ${escapeHTML(r.hostname)} — ${r.status}`, '');
-        }
-      }
-
-      if (failures > 0) {
-        progressFill.classList.add('has-failures');
-        globalLog(`\n[done] Completed with ${failures} failure(s) / ${total}`, 'warn');
-      } else {
-        globalLog(`\n[done] All ${total} device(s) pushed successfully`, 'ok');
-      }
-    } catch (err) {
-      globalLog(`[fail] Execution error: ${escapeHTML(err.message)}`, 'err');
-    }
-
-    const doneBtn = el('button', { class: 'btn', style: 'margin-top:12px' }, '← Back to jobs');
-    doneBtn.onclick = () => setStep(0);
-    stepContent.appendChild(doneBtn);
-  }
-
-  renderStep();
-};
-
-// ---------- Export Modal (bulk config download) ----------
-async function openExportModal(preselectedIds) {
-  let devices = [];
-  try { devices = await api('GET', '/devices'); } catch (_) {}
-
-  const backdrop = el('div', { class: 'modal-backdrop' });
-  const box = el('div', { class: 'modal-box', style: 'max-width:680px' });
-
-  box.appendChild(el('h3', { style: 'margin:0 0 4px' }, '📥 Export Configurations'));
-  box.appendChild(el('p', { class: 'muted', style: 'font-size:var(--font-size-xs);margin:0 0 var(--space-3)' },
-    'Download device configurations in your preferred format. Select devices, choose a date range, and pick the output format.'));
-
-  const body = el('div', { class: 'export-modal-body' });
-
-  // --- Section 1: Device multi-select with search ---
-  const devSearch = el('input', { type: 'search', placeholder: 'Filter devices…', style: 'width:100%;padding:6px 10px;border:1px solid var(--border-default);border-radius:var(--radius-sm);font-size:var(--font-size-xs);margin-bottom:6px;background:var(--surface-card);color:var(--text-default)' });
-  const selectAllCb = el('input', { type: 'checkbox' });
-  const deviceListEl = el('div', { class: 'export-device-list' });
-  const checkboxes = [];
-
-  for (const d of devices) {
-    const cb = el('input', { type: 'checkbox', value: String(d.id), 'data-hostname': d.hostname, 'data-driver': d.driver });
-    if (preselectedIds && preselectedIds.includes(d.id)) cb.checked = true;
-    checkboxes.push(cb);
-    const lbl = el('label', {}, cb,
-      el('span', { style: 'font-weight:500' }, ` ${escapeHTML(d.hostname)}`),
-      el('span', { style: 'color:var(--text-muted);margin-left:6px;font-size:0.7rem' }, escapeHTML(d.driver)));
-    lbl.dataset.searchable = `${d.hostname} ${d.driver} ${d.address}`.toLowerCase();
-    deviceListEl.appendChild(lbl);
-  }
-
-  devSearch.oninput = () => {
-    const q = devSearch.value.toLowerCase();
-    for (const lbl of deviceListEl.children) {
-      lbl.hidden = q && !lbl.dataset.searchable.includes(q);
-    }
-  };
-  selectAllCb.onchange = () => {
-    const visible = [...deviceListEl.querySelectorAll('label:not([hidden]) input[type=checkbox]')];
-    visible.forEach(cb => { cb.checked = selectAllCb.checked; });
-  };
-
-  const selectedCount = el('span', { style: 'font-size:var(--font-size-xs);color:var(--text-muted)' }, '0 selected');
-  deviceListEl.addEventListener('change', () => {
-    const n = checkboxes.filter(cb => cb.checked).length;
-    selectedCount.textContent = `${n} selected`;
-  });
-  // Fire initial count for preselected
-  setTimeout(() => {
-    const n = checkboxes.filter(cb => cb.checked).length;
-    selectedCount.textContent = `${n} selected`;
-  }, 0);
-
-  body.append(
-    el('div', { style: 'display:flex;justify-content:space-between;align-items:center' },
-      el('label', { style: 'font-size:var(--font-size-sm);font-weight:600' }, 'Devices'),
-      el('div', { style: 'display:flex;align-items:center;gap:8px' },
-        selectedCount,
-        el('label', { style: 'font-size:var(--font-size-xs);display:flex;align-items:center;gap:4px;cursor:pointer' }, selectAllCb, ' All'))),
-    devSearch, deviceListEl);
-
-  // --- Section 2: Date range ---
-  const today = new Date().toISOString().split('T')[0];
-  const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
-  const dateFrom = el('input', { type: 'date', value: weekAgo, style: 'padding:5px 8px;border:1px solid var(--border-default);border-radius:var(--radius-sm);font-size:var(--font-size-xs);background:var(--surface-card);color:var(--text-default)' });
-  const dateTo = el('input', { type: 'date', value: today, style: 'padding:5px 8px;border:1px solid var(--border-default);border-radius:var(--radius-sm);font-size:var(--font-size-xs);background:var(--surface-card);color:var(--text-default)' });
-  const versionSelect = el('select', { style: 'padding:5px 8px;border:1px solid var(--border-default);border-radius:var(--radius-sm);font-size:var(--font-size-xs);background:var(--surface-card);color:var(--text-default)' },
-    el('option', { value: 'latest' }, 'Latest version only'),
-    el('option', { value: 'all' }, 'All versions in range'));
-
-  body.append(
-    el('div', { class: 'section-divider', style: 'margin:var(--space-2) 0' }, 'VERSION & DATE RANGE'),
-    el('div', { style: 'display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;align-items:end' },
-      el('div', {},
-        el('label', { style: 'font-size:var(--font-size-xs);font-weight:600;display:block;margin-bottom:2px' }, 'From'),
-        dateFrom),
-      el('div', {},
-        el('label', { style: 'font-size:var(--font-size-xs);font-weight:600;display:block;margin-bottom:2px' }, 'To'),
-        dateTo),
-      el('div', {},
-        el('label', { style: 'font-size:var(--font-size-xs);font-weight:600;display:block;margin-bottom:2px' }, 'Versions'),
-        versionSelect)));
-
-  // --- Section 3: Format selector ---
-  let selectedFormat = 'zip';
-  const formatGroup = el('div', { class: 'export-format-group' });
-  const formats = [
-    { id: 'zip', label: '📦 ZIP Archive', desc: 'Bundle all device configs as hostname.cfg in a ZIP file' },
-    { id: 'text', label: '📄 Plain Text (.cfg)', desc: 'Concatenated readable config file' },
-    { id: 'json', label: '{ } JSON', desc: 'Structured JSON array for programmatic analysis' },
-    { id: 'binary', label: '💾 Binary (.backup)', desc: 'Vendor-specific binary (MikroTik .backup files)' },
-  ];
-  for (const f of formats) {
-    const btn = el('button', { type: 'button', class: 'export-format-btn' + (f.id === 'zip' ? ' selected' : ''), title: f.desc }, f.label);
-    btn.onclick = () => {
-      selectedFormat = f.id;
-      formatGroup.querySelectorAll('.export-format-btn').forEach(b => b.classList.remove('selected'));
-      btn.classList.add('selected');
-      // Show binary note if applicable
-      binaryNote.hidden = f.id !== 'binary';
-    };
-    formatGroup.appendChild(btn);
-  }
-  const binaryNote = el('p', { style: 'font-size:var(--font-size-xs);color:var(--status-warn);margin:4px 0 0', hidden: true },
-    '⚠ Binary export only available for devices with .backup artifacts (e.g. MikroTik). Others will export as text.');
-
-  body.append(
-    el('div', { class: 'section-divider', style: 'margin:var(--space-2) 0' }, 'EXPORT FORMAT'),
-    formatGroup, binaryNote);
-
-  // --- Section 4: Actions ---
-  const statusEl = el('p', { class: 'muted', style: 'font-size:var(--font-size-xs);min-height:1.4em;margin:var(--space-2) 0 0' });
-  const progressWrap = el('div', { style: 'display:none;margin-top:8px' });
-  const progressFill = el('div', { class: 'progress-bar-fill', style: 'width:0%' });
-  progressWrap.appendChild(el('div', { class: 'progress-bar-wrap' }, progressFill));
-
-  const exportBtn = el('button', { class: 'btn' }, '💾 Download');
-  const cancelBtn = el('button', { class: 'btn ghost' }, 'Cancel');
-  cancelBtn.onclick = () => backdrop.remove();
-
-  exportBtn.onclick = async () => {
-    const ids = checkboxes.filter(cb => cb.checked).map(cb => Number(cb.value));
-    if (!ids.length) { statusEl.textContent = '⚠ Select at least one device.'; statusEl.style.color = 'var(--status-bad)'; return; }
-    statusEl.textContent = `Exporting ${ids.length} device(s)…`; statusEl.style.color = '';
-    exportBtn.disabled = true;
-    progressWrap.style.display = 'block';
-
-    try {
-      if (selectedFormat === 'zip' || selectedFormat === 'binary') {
-        // Server-side ZIP generation
-        const resp = await fetch('/api/v1/export/configs', {
-          method: 'POST', credentials: 'same-origin',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            device_ids: ids,
-            format: selectedFormat === 'binary' ? 'binary' : 'text',
-            from_date: dateFrom.value,
-            to_date: dateTo.value,
-            all_versions: versionSelect.value === 'all',
-          }),
-        });
-        if (!resp.ok) {
-          const errBody = await resp.text();
-          throw new Error(resp.statusText + (errBody ? ': ' + errBody : ''));
-        }
-        progressFill.style.width = '100%';
-        const blob = await resp.blob();
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = selectedFormat === 'binary' ? 'netmantle-backups.zip' : 'netmantle-configs.zip';
-        a.click();
-        URL.revokeObjectURL(a.href);
-        statusEl.textContent = '✓ Download started'; statusEl.style.color = 'var(--status-ok)';
-      } else {
-        // Client-side assembly for text/JSON
-        const configs = [];
-        for (let i = 0; i < ids.length; i++) {
-          progressFill.style.width = Math.round(((i + 1) / ids.length) * 100) + '%';
-          const id = ids[i];
-          try {
-            const cfg = await api('GET', `/devices/${id}/config`);
-            const dev = devices.find(d => d.id === id);
-            configs.push({
-              hostname: dev?.hostname || 'device-' + id,
-              driver: dev?.driver || 'unknown',
-              address: dev?.address || '',
-              exported_at: new Date().toISOString(),
-              config: typeof cfg === 'string' ? cfg : JSON.stringify(cfg),
-            });
-          } catch (_) { /* skip devices without configs */ }
-        }
-        if (!configs.length) throw new Error('No configurations available for selected devices.');
-
-        if (selectedFormat === 'json') {
-          const output = {
-            export_date: new Date().toISOString(),
-            device_count: configs.length,
-            devices: configs,
-          };
-          const blob = new Blob([JSON.stringify(output, null, 2)], { type: 'application/json' });
-          const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-          a.download = 'netmantle-configs.json'; a.click();
-          URL.revokeObjectURL(a.href);
-        } else {
-          // Plain text concatenated with clear separators
-          const header = `# NetMantle Configuration Export\n# Date: ${new Date().toISOString()}\n# Devices: ${configs.length}\n${'#'.repeat(60)}\n\n`;
-          const text = header + configs.map(c =>
-            `${'#'.repeat(60)}\n# Device: ${c.hostname}\n# Driver: ${c.driver}\n# Address: ${c.address}\n${'#'.repeat(60)}\n\n${c.config}\n`
-          ).join('\n');
-          const blob = new Blob([text], { type: 'text/plain' });
-          const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-          a.download = 'netmantle-configs.cfg'; a.click();
-          URL.revokeObjectURL(a.href);
-        }
-        statusEl.textContent = `✓ Exported ${configs.length} config(s)`; statusEl.style.color = 'var(--status-ok)';
-      }
-    } catch (e) {
-      statusEl.textContent = '✗ Export failed: ' + e.message; statusEl.style.color = 'var(--status-bad)';
-    }
-    exportBtn.disabled = false;
-    setTimeout(() => { progressWrap.style.display = 'none'; progressFill.style.width = '0%'; }, 2000);
-  };
-
-  body.append(statusEl, progressWrap,
-    el('div', { style: 'display:flex;gap:8px;justify-content:flex-end;margin-top:var(--space-2)' }, cancelBtn, exportBtn));
-  box.appendChild(body);
-  backdrop.appendChild(box);
-  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) backdrop.remove(); });
-  document.body.appendChild(backdrop);
-}
-
-// ---------- Settings ----------
-views.settings = async (root) => {
-  const CATS = [
-    { id: 'general',       label: 'General',         icon: '⚙' },
-    { id: 'connectivity',  label: 'Connectivity',     icon: '🔌' },
-    { id: 'credentials',   label: 'Credentials',      icon: '🔑' },
-    { id: 'connectors',    label: 'Connectors',       icon: '🛰' },
-    { id: 'security',      label: 'Security',         icon: '🛡' },
-    { id: 'notifications', label: 'Notifications',    icon: '🔔' },
-    { id: 'api',           label: 'API & Tokens',     icon: '🗝' },
-    { id: 'auditlogs',     label: 'Audit Logs',       icon: '📋' },
-  ];
-
-  // Save bar (appended to body, removed on navigation)
-  const saveBar = el('div', { class: 'settings-save-bar', id: 'settings-save-bar' },
-    el('span', { class: 'msg' }, 'You have unsaved changes.'),
-    el('button', { class: 'btn ghost', id: 'settings-discard' }, 'Discard'),
-    el('button', { class: 'btn', id: 'settings-save' }, 'Save changes'),
-  );
-  document.body.appendChild(saveBar);
-
-  let dirty = false;
-  function markDirty() { dirty = true; saveBar.classList.add('visible'); }
-  function markClean() { dirty = false; saveBar.classList.remove('visible'); }
-
-  // Two-column shell
-  const shell = el('div', { class: 'settings-shell' });
-  const nav = el('nav', { class: 'settings-nav' });
-  for (const c of CATS) {
-    const a = el('a', { 'data-cat': c.id }, c.icon + ' ' + c.label);
-    a.onclick = (e) => { e.preventDefault(); showSection(c.id); };
-    nav.appendChild(a);
-  }
-
-  const contentWrap = el('div', { class: 'settings-content' });
-  const breadcrumb = el('div', { class: 'settings-breadcrumb' });
-  const contentArea = el('div', { id: 'settings-section-content' });
-  contentWrap.append(breadcrumb, contentArea);
-  shell.append(nav, contentWrap);
-  root.appendChild(shell);
-
-  // Parse active section from hash, e.g. #/settings/connectivity
-  const hashPart = (location.hash || '').replace(/^#\/?settings\/?/, '');
-  const initCat = CATS.find(c => c.id === hashPart)?.id || 'general';
-
-  function showSection(id) {
-    nav.querySelectorAll('[data-cat]').forEach(a =>
-      a.classList.toggle('active', a.dataset.cat === id));
-    const cat = CATS.find(c => c.id === id);
-    breadcrumb.innerHTML = '';
-    breadcrumb.append('Settings › ', el('span', {}, cat?.label || id));
-    contentArea.innerHTML = '';
-    markClean();
-    ({
-      general:       renderGeneral,
-      connectivity:  renderConnectivity,
-      credentials:   renderCredentials,
-      connectors:    renderConnectors,
-      security:      renderSecurity,
-      notifications: renderNotifications,
-      api:           renderApiTokens,
-      auditlogs:     renderAuditLogs,
-    }[id] || renderGeneral)(contentArea);
-  }
-
-  // ---- shared helpers ----
-  function sectionDivider(title) {
-    return el('div', { class: 'section-divider' }, title);
-  }
-
-  function fieldRow(labelText, input, helpText) {
-    const row = el('div', { class: 'field-row' }, el('label', {}, labelText));
-    row.appendChild(input);
-    if (helpText) row.appendChild(el('span', { class: 'help' }, helpText));
-    return row;
-  }
-
-  function toggleRow(labelText, checked, helpText, onChange) {
-    const inp = el('input', { type: 'checkbox' });
-    inp.checked = checked;
-    inp.addEventListener('change', () => { onChange && onChange(inp.checked); markDirty(); });
-    const sw = el('label', { class: 'toggle-switch' }, inp, el('span', { class: 'toggle-slider' }));
-    const row = el('div', { class: 'toggle-row field-row' }, sw, el('label', {}, labelText));
-    if (helpText) row.appendChild(el('span', { class: 'help' }, helpText));
-    return row;
-  }
-
-  function rangeRow(labelText, min, max, val, unit, helpText) {
-    const valLabel = el('span', { class: 'range-val' }, String(val) + (unit || ''));
-    const inp = el('input', { type: 'range', min: String(min), max: String(max), value: String(val) });
-    inp.addEventListener('input', () => { valLabel.textContent = inp.value + (unit || ''); markDirty(); });
-    const rangeWrap = el('div', { class: 'range-row' }, inp, valLabel);
-    const row = el('div', { class: 'field-row' }, el('label', {}, labelText), rangeWrap);
-    if (helpText) row.appendChild(el('span', { class: 'help' }, helpText));
-    return row;
-  }
-
-  function numInput(val) {
-    const inp = el('input', { type: 'number', value: String(val), style: 'max-width:120px' });
-    inp.addEventListener('input', markDirty);
-    return inp;
-  }
-
-  function textInput(val, placeholder) {
-    const inp = el('input', { type: 'text', value: val || '', placeholder: placeholder || '' });
-    inp.addEventListener('input', markDirty);
-    return inp;
-  }
-
-  // ---- General ----
-  function renderGeneral(area) {
-    area.appendChild(el('h2', { style: 'margin-bottom:var(--space-3)' }, 'General'));
-
-    area.appendChild(sectionDivider('Backup Scheduling'));
-    area.appendChild(el('div', { class: 'field-group' },
-      toggleRow('Enable scheduled backups',
-        localStorage.getItem('nm.sched.enabled') !== 'false',
-        'When enabled, all devices are polled for config changes on the interval below.',
-        (v) => localStorage.setItem('nm.sched.enabled', String(v))),
-      fieldRow('Backup interval (hours)',
-        Object.assign(numInput(localStorage.getItem('nm.sched.interval') || '4'),
-          { onchange: function() { localStorage.setItem('nm.sched.interval', this.value); } }),
-        'How often devices are automatically polled for configuration changes.'),
-    ));
-
-    area.appendChild(sectionDivider('Concurrency'));
-    area.appendChild(el('div', { class: 'field-group' },
-      rangeRow('Max concurrent backups', 1, 50,
-        Number(localStorage.getItem('nm.concurrency') || 5), '',
-        'Limits simultaneous SSH sessions. Lower values reduce CPU spike risk on large networks.'),
-    ));
-
-    area.appendChild(sectionDivider('Retention'));
-    area.appendChild(el('div', { class: 'field-group' },
-      fieldRow('Keep last N versions per device',
-        Object.assign(numInput(localStorage.getItem('nm.retention') || '50'),
-          { onchange: function() { localStorage.setItem('nm.retention', this.value); } }),
-        'Older git commits are pruned per device. Set to 0 for unlimited.'),
-    ));
-
-    // -- Automation Scheduler --
-    area.appendChild(sectionDivider('Automation Scheduler'));
-    const schedWrap = el('div', { class: 'field-group' });
-    schedWrap.appendChild(el('p', { class: 'muted', style: 'font-size:var(--font-size-xs);margin:0 0 12px' },
-      'Schedule recurring backup or push jobs. Cron expressions run in server timezone.'));
-
-    const schedGrid = el('div', { class: 'schedule-grid', id: 'schedule-grid' });
-    schedWrap.appendChild(schedGrid);
-
-    // Load existing schedules
-    async function loadSchedules() {
-      schedGrid.innerHTML = '<p class="muted" style="font-size:var(--font-size-sm)">Loading schedules…</p>';
-      let schedules = [];
-      try { schedules = await api('GET', '/schedules'); } catch (_) {}
-      schedGrid.innerHTML = '';
-      if (!schedules.length) {
-        schedGrid.appendChild(el('p', { class: 'muted', style: 'font-size:var(--font-size-sm)' }, 'No schedules configured.'));
-      }
-      for (const s of schedules) {
-        const toggle = el('input', { type: 'checkbox' });
-        toggle.checked = s.enabled;
-        const sw = el('label', { class: 'toggle-switch' }, toggle, el('span', { class: 'toggle-slider' }));
-        toggle.onchange = async () => {
-          try { await api('PUT', `/schedules/${s.id}`, { ...s, enabled: toggle.checked }); } catch (_) {}
-        };
-        const delBtn = el('button', { class: 'btn ghost', style: 'font-size:0.7rem;padding:3px 8px' }, '🗑');
-        delBtn.onclick = async () => {
-          if (!confirm('Delete this schedule?')) return;
-          try { await api('DELETE', `/schedules/${s.id}`); loadSchedules(); } catch (_) {}
-        };
-        schedGrid.appendChild(el('div', { class: 'schedule-card' },
-          el('div', { class: 'sc-info' },
-            el('span', { class: 'sc-name' }, escapeHTML(s.kind || 'backup') + ': ' + escapeHTML(s.target || 'all')),
-            el('span', { class: 'sc-cron' }, escapeHTML(s.cron_expr || ''))),
-          sw, delBtn));
-      }
-    }
-    loadSchedules();
-
-    // Add new schedule form
-    const addSchedDet = el('details', { style: 'margin-top:12px' },
-      el('summary', { style: 'cursor:pointer;font-weight:600;font-size:var(--font-size-sm)' }, '+ Add schedule'));
-
-    const cronPresets = [
-      { label: 'Every hour', cron: '0 * * * *' },
-      { label: 'Every 4 hours', cron: '0 */4 * * *' },
-      { label: 'Daily 02:00', cron: '0 2 * * *' },
-      { label: 'Daily 06:00', cron: '0 6 * * *' },
-      { label: 'Twice daily', cron: '0 2,14 * * *' },
-      { label: 'Weekly Mon', cron: '0 2 * * 1' },
-    ];
-
-    const cronInput = el('input', { type: 'text', placeholder: '0 */4 * * *', style: 'width:100%;padding:7px 10px;border:1px solid var(--border-default);border-radius:var(--radius-sm);font-family:var(--font-mono);font-size:0.8rem;background:var(--surface-card);color:var(--text-default)' });
-    const presetGrid = el('div', { class: 'cron-preset-grid' });
-    for (const p of cronPresets) {
-      const b = el('div', { class: 'cron-preset' }, p.label);
-      b.onclick = () => {
-        cronInput.value = p.cron;
-        presetGrid.querySelectorAll('.cron-preset').forEach(x => x.classList.remove('selected'));
-        b.classList.add('selected');
-      };
-      presetGrid.appendChild(b);
-    }
-
-    const kindSel = el('select', { style: 'padding:6px 10px;border:1px solid var(--border-default);border-radius:var(--radius-sm);font-size:var(--font-size-sm);background:var(--surface-card);color:var(--text-default)' },
-      el('option', { value: 'backup' }, 'Backup all devices'),
-      el('option', { value: 'push' }, 'Run push job'));
-    const targetInp = el('input', { type: 'text', placeholder: 'all (or group ID)', style: 'padding:6px 10px;border:1px solid var(--border-default);border-radius:var(--radius-sm);font-size:var(--font-size-sm);background:var(--surface-card);color:var(--text-default)' });
-    const addBtn = el('button', { class: 'btn', style: 'margin-top:8px' }, 'Add Schedule');
-    addBtn.onclick = async () => {
-      const cron = cronInput.value.trim();
-      if (!cron) { alert('Enter a cron expression.'); return; }
-      try {
-        await api('POST', '/schedules', {
-          kind: kindSel.value,
-          target: targetInp.value.trim() || 'all',
-          cron_expr: cron,
-          enabled: true,
-        });
-        addSchedDet.open = false;
-        loadSchedules();
-      } catch (err) { alert('Failed: ' + err.message); }
-    };
-
-    addSchedDet.append(el('div', { style: 'margin-top:12px;display:grid;gap:8px' },
-      el('label', { style: 'font-size:var(--font-size-sm);font-weight:600' }, 'Frequency'),
-      presetGrid,
-      el('label', { style: 'font-size:var(--font-size-sm)' }, 'Or enter custom cron expression:'),
-      cronInput,
-      el('span', { class: 'help' }, 'Standard 5-field cron: minute hour day month weekday'),
-      el('div', { style: 'display:grid;grid-template-columns:1fr 1fr;gap:8px' },
-        el('div', {},
-          el('label', { style: 'font-size:var(--font-size-sm);font-weight:600' }, 'Type'),
-          kindSel),
-        el('div', {},
-          el('label', { style: 'font-size:var(--font-size-sm);font-weight:600' }, 'Target'),
-          targetInp)),
-      addBtn));
-    schedWrap.appendChild(addSchedDet);
-    area.appendChild(schedWrap);
-
-    saveBar.querySelector('#settings-save').onclick = () => {
-      alert('Settings saved locally. Server-side application requires restart or API support.');
-      markClean();
-    };
-    saveBar.querySelector('#settings-discard').onclick = () => { showSection('general'); };
-  }
-
-  // ---- Connectivity ----
-  function renderConnectivity(area) {
-    area.appendChild(el('h2', { style: 'margin-bottom:var(--space-3)' }, 'Connectivity'));
-
-    area.appendChild(sectionDivider('SSH'));
-    area.appendChild(el('div', { class: 'field-group' },
-      fieldRow('Connection timeout (seconds)', numInput(30), 'Max time waiting for TCP connection to establish.'),
-      fieldRow('Command timeout (seconds)', numInput(60), 'Max time waiting for a CLI prompt response after sending a command.'),
-      fieldRow('Retries on failure', numInput(2), 'Number of retry attempts before marking a backup run as failed.'),
-      fieldRow('Command delay (ms)', numInput(0), 'Millisecond pause between CLI commands. Increase for slow or legacy hardware that drops characters under fast input.'),
-    ));
-
-    area.appendChild(sectionDivider('Telnet'));
-    area.appendChild(el('div', { class: 'field-group' },
-      fieldRow('Port', numInput(23), ''),
-      fieldRow('Timeout (seconds)', numInput(30), ''),
-    ));
-
-    area.appendChild(sectionDivider('HTTP / REST'));
-    area.appendChild(el('div', { class: 'field-group' },
-      fieldRow('HTTP timeout (seconds)', numInput(30), ''),
-      toggleRow('Verify TLS certificates', true, 'Disable only for internal test environments with self-signed certs.'),
-    ));
-
-    saveBar.querySelector('#settings-save').onclick = () => { alert('Connectivity settings noted. Full server-side API integration is on the roadmap.'); markClean(); };
-    saveBar.querySelector('#settings-discard').onclick = () => { showSection('connectivity'); };
-  }
-
-  // ---- Credentials ----
-  async function renderCredentials(area) {
-    area.appendChild(el('h2', { style: 'margin-bottom:var(--space-3)' }, 'Credentials'));
-
-    const tblWrap = el('div', { class: 'table-wrapper', style: 'margin-bottom:var(--space-4)' });
-    area.appendChild(tblWrap);
-
-    async function loadCredsTable() {
-      tblWrap.innerHTML = '<p class="muted">Loading…</p>';
-      try {
-        const creds = await api('GET', '/credentials');
-        if (!creds || !creds.length) { tblWrap.innerHTML = '<p class="muted">No credentials yet.</p>'; return; }
-        const tbl = el('table', { class: 'device-table' },
-          el('thead', {}, el('tr', {},
-            el('th', {}, 'Name'), el('th', {}, 'Username'), el('th', {}, 'Created'), el('th', {}, ''))),
-          el('tbody'));
-        for (const c of creds) {
-          const tr = el('tr', {},
-            el('td', {}, escapeHTML(c.name)),
-            el('td', {}, escapeHTML(c.username || '—')),
-            el('td', {}, c.created_at ? relativeTime(new Date(c.created_at)) : '—'),
-            el('td', {}, (() => {
-              const d = el('button', { class: 'qa-btn' }, 'Delete');
-              d.onclick = async () => {
-                if (!confirm('Delete credential "' + c.name + '"?')) return;
-                try { await api('DELETE', '/credentials/' + c.id); loadCredsTable(); }
-                catch (err) { alert(err.message); }
-              };
-              return d;
-            })()),
-          );
-          tbl.querySelector('tbody').appendChild(tr);
-        }
-        tblWrap.innerHTML = '';
-        tblWrap.appendChild(tbl);
-      } catch (e) { tblWrap.innerHTML = '<p class="error">' + escapeHTML(e.message) + '</p>'; }
-    }
-    loadCredsTable();
-
-    const addDetails = el('details');
-    addDetails.appendChild(el('summary', { style: 'cursor:pointer;font-weight:600;font-size:var(--font-size-sm);margin-bottom:8px' }, '+ Add credential'));
-    const addForm = buildAddCredentialForm(() => { addDetails.open = false; loadCredsTable(); });
-    addDetails.appendChild(addForm);
-    area.appendChild(addDetails);
-
-    area.appendChild(sectionDivider('Credential Binding'));
-    area.appendChild(el('p', { class: 'muted', style: 'font-size:var(--font-size-sm)' },
-      'Assign credentials to devices from the Inventory page. Select a device row and the contextual sidebar lets you choose a credential. Bulk assignment is planned via device group tags.'));
-  }
-
-  // ---- Connectors ----
-  async function renderConnectors(area) {
-    area.appendChild(el('h2', { style: 'margin-bottom:var(--space-3)' }, 'Remote Cores (Pollers)'));
-
-    const grid = el('div', { class: 'poller-grid', style: 'margin-bottom:var(--space-4)' });
-    area.appendChild(grid);
-    try {
-      const pollers = await api('GET', '/pollers');
-      if (!pollers || !pollers.length) {
-        grid.appendChild(el('p', { class: 'muted' }, 'No remote pollers registered. This server handles all polling directly.'));
-      } else {
-        for (const p of pollers) {
-          const lastSeen = p.last_seen ? new Date(p.last_seen) : null;
-          const ageMs = lastSeen ? Date.now() - lastSeen.getTime() : Infinity;
-          const statusCls = ageMs < 120000 ? 'ok' : ageMs < 600000 ? 'warn' : 'bad';
-          const statusLabel = ageMs < 120000 ? 'Healthy' : ageMs < 600000 ? 'Stale' : 'Offline';
-          grid.appendChild(el('div', { class: 'poller-card' },
-            el('div', { class: 'p-name' }, escapeHTML(p.name || 'Unnamed')),
-            el('div', { class: 'p-zone' }, 'Zone: ' + escapeHTML(p.zone || '—')),
-            el('div', { class: 'p-status' },
-              el('span', { class: 'badge badge-' + statusCls }, statusLabel),
-              el('span', { class: 'muted', style: 'font-size:var(--font-size-xs);margin-left:8px' },
-                lastSeen ? relativeTime(lastSeen) : 'never seen')),
-          ));
-        }
-      }
-    } catch (e) {
-      grid.appendChild(el('p', { class: 'error' }, 'Error: ' + escapeHTML(e.message)));
-    }
-
-    area.appendChild(sectionDivider('Register a Remote Core'));
-    area.appendChild(el('p', { class: 'muted', style: 'font-size:var(--font-size-sm)' },
-      'Deploy the netmantle binary on a remote site with the same config.yaml pointing to this server\'s DB. Remote pollers self-register on startup.'));
-  }
-
-  // ---- Security ----
-  function renderSecurity(area) {
-    area.appendChild(el('h2', { style: 'margin-bottom:var(--space-3)' }, 'Security & Identity'));
-
-    // IP Whitelisting
-    area.appendChild(sectionDivider('IP Whitelisting'));
-    const ipTa = el('textarea', { rows: '5', placeholder: '0.0.0.0/0\n10.0.0.0/8', style: 'width:100%;font-family:var(--font-mono);font-size:0.8rem' });
-    ipTa.value = localStorage.getItem('nm.ip_whitelist') || '';
-    ipTa.addEventListener('input', markDirty);
-    area.appendChild(el('div', { class: 'field-group' },
-      el('div', { class: 'field-row' },
-        el('label', {}, 'Allowed IP ranges (CIDR, one per line)'),
-        ipTa,
-        el('span', { class: 'help' }, 'Restricts web UI and API access. Leave blank to allow all. Enforced on next server restart.'),
-      )));
-
-    // Authentication Sources
-    area.appendChild(sectionDivider('Authentication Sources'));
-    const authTabs = ['Local', 'LDAP', 'RADIUS'];
-    let activeAuthTab = 0;
-    const tabStrip = el('div', { class: 'tab-strip' });
-    const authContent = el('div');
-
-    function renderAuthTab(i) {
-      activeAuthTab = i;
-      tabStrip.querySelectorAll('.tab').forEach((t, ti) => t.classList.toggle('active', ti === i));
-      authContent.innerHTML = '';
-      if (i === 0) {
-        authContent.appendChild(el('p', { class: 'muted', style: 'font-size:var(--font-size-sm);padding:12px 0' },
-          'Local authentication is always enabled. Manage users via the Tenants section or the API.'));
-      } else if (i === 1) {
-        const flds = el('div', { class: 'field-group' },
-          el('div', { class: 'field-row' }, el('label', {}, 'LDAP Server URL'), textInput('', 'ldap://ldap.example.com:389'), el('span', { class: 'help' }, 'e.g. ldaps://ad.corp.local:636')),
-          el('div', { class: 'field-row' }, el('label', {}, 'Base DN'), textInput('', 'DC=corp,DC=local')),
-          el('div', { class: 'field-row' }, el('label', {}, 'Bind DN'), textInput('', 'CN=svcNetMantle,CN=Users,DC=corp,DC=local')),
-          el('div', { class: 'field-row' }, el('label', {}, 'Bind password'), (() => { const inp = el('input', { type: 'password', placeholder: '••••••••' }); inp.addEventListener('input', markDirty); return inp; })()),
-          el('div', { class: 'field-row' }, el('label', {}, 'Username attribute'), textInput('sAMAccountName')),
-        );
-        const testBtn = el('button', { class: 'btn ghost', style: 'margin-top:8px' }, 'Test LDAP connection');
-        testBtn.onclick = () => alert('LDAP integration is on the roadmap. Connection test not yet available.');
-        authContent.append(flds, testBtn, el('p', { class: 'help', style: 'margin-top:6px' }, 'LDAP/Active Directory sync is planned. See docs/roadmap.md for status.'));
-      } else {
-        const flds = el('div', { class: 'field-group' },
-          el('div', { class: 'field-row' }, el('label', {}, 'RADIUS Server'), textInput('', '10.0.0.1')),
-          el('div', { class: 'field-row' }, el('label', {}, 'Port'), numInput(1812)),
-          el('div', { class: 'field-row' }, el('label', {}, 'Shared Secret'), (() => { const inp = el('input', { type: 'password' }); inp.addEventListener('input', markDirty); return inp; })()),
-        );
-        const testBtn = el('button', { class: 'btn ghost', style: 'margin-top:8px' }, 'Test RADIUS connection');
-        testBtn.onclick = () => alert('RADIUS integration is on the roadmap.');
-        authContent.append(flds, testBtn, el('p', { class: 'help', style: 'margin-top:6px' }, 'RADIUS is planned for ISP/enterprise SSO scenarios. See docs/roadmap.md.'));
-      }
-    }
-
-    for (let i = 0; i < authTabs.length; i++) {
-      const tab = el('div', { class: 'tab' + (i === 0 ? ' active' : '') }, authTabs[i]);
-      const idx = i;
-      tab.onclick = () => renderAuthTab(idx);
-      tabStrip.appendChild(tab);
-    }
-    renderAuthTab(0);
-    area.append(tabStrip, authContent);
-
-    // MFA
-    area.appendChild(sectionDivider('Multi-Factor Authentication'));
-    const mfaContainer = el('div', { class: 'field-group' });
-    area.appendChild(mfaContainer);
-
-    async function loadMFA() {
-      mfaContainer.innerHTML = '';
-      const meObj = window._me || {};
-      const enrolled = sessionStorage.getItem('mfa_enrolled_' + (meObj.id || ''));
-      if (enrolled === 'true') {
-        mfaContainer.appendChild(el('p', { style: 'color:var(--status-ok);font-weight:600' }, '✓ MFA enabled for your account'));
-        const disBtn = el('button', { class: 'btn danger' }, 'Disable MFA');
-        disBtn.onclick = async () => {
-          if (!confirm('Disable MFA?')) return;
-          try { await api('DELETE', '/auth/mfa'); sessionStorage.removeItem('mfa_enrolled_' + (meObj.id || '')); loadMFA(); }
-          catch (err) { alert(err.message); }
-        };
-        mfaContainer.appendChild(disBtn);
-      } else {
-        mfaContainer.appendChild(el('p', { class: 'muted', style: 'font-size:var(--font-size-sm)' }, 'MFA is not enabled. Add a TOTP authenticator app for extra security.'));
-        const enrollBtn = el('button', { class: 'btn' }, 'Set up TOTP MFA');
-        enrollBtn.onclick = async () => {
-          try {
-            const { secret, otpauth_url } = await api('POST', '/auth/mfa/enroll');
-            mfaContainer.innerHTML = '';
-            mfaContainer.append(
-              el('p', { style: 'font-size:var(--font-size-sm)' }, 'Scan this secret in your authenticator, then confirm:'),
-              el('div', { class: 'mfa-secret-box' }, escapeHTML(secret)),
-              el('p', { style: 'font-size:0.7rem;color:var(--text-muted);word-break:break-all' }, escapeHTML(otpauth_url)),
-            );
-            const cf = el('form', { style: 'display:flex;gap:8px;margin-top:12px' },
-              el('input', { name: 'code', placeholder: '000000', maxlength: '6', pattern: '[0-9]{6}', inputmode: 'numeric', style: 'width:90px;text-align:center;letter-spacing:0.2em;font-size:1.1rem' }),
-              el('button', { type: 'submit', class: 'btn' }, 'Activate'));
-            cf.onsubmit = async (ev) => {
-              ev.preventDefault();
-              const code = new FormData(cf).get('code');
-              try {
-                await api('POST', '/auth/mfa/confirm', { code });
-                sessionStorage.setItem('mfa_enrolled_' + (meObj.id || ''), 'true');
-                loadMFA();
-              } catch (_) { alert('Invalid code.'); }
-            };
-            mfaContainer.appendChild(cf);
-          } catch (err) { alert(err.message); }
-        };
-        mfaContainer.appendChild(enrollBtn);
-      }
-    }
-    loadMFA();
-
-    saveBar.querySelector('#settings-save').onclick = () => {
-      localStorage.setItem('nm.ip_whitelist', ipTa.value);
-      alert('Security settings saved locally.');
-      markClean();
-    };
-    saveBar.querySelector('#settings-discard').onclick = () => showSection('security');
-  }
-
-  // ---- Notifications ----
-  async function renderNotifications(area) {
-    area.appendChild(el('h2', { style: 'margin-bottom:var(--space-3)' }, 'Notifications'));
-
-    area.appendChild(sectionDivider('Notification Channels'));
-    const chanTblWrap = el('div', { class: 'table-wrapper', style: 'margin-bottom:var(--space-3)' });
-    area.appendChild(chanTblWrap);
-
-    async function loadChannels() {
-      chanTblWrap.innerHTML = '<p class="muted">Loading…</p>';
-      try {
-        const channels = await api('GET', '/notifications/channels');
-        if (!channels || !channels.length) { chanTblWrap.innerHTML = '<p class="muted">No channels configured.</p>'; return; }
-        const tbl = el('table', { class: 'device-table' },
-          el('thead', {}, el('tr', {}, el('th', {}, 'Name'), el('th', {}, 'Kind'), el('th', {}, 'Created'))),
-          el('tbody'));
-        for (const c of channels) {
-          tbl.querySelector('tbody').appendChild(el('tr', {},
-            el('td', {}, escapeHTML(c.name)),
-            el('td', {}, el('code', {}, escapeHTML(c.kind))),
-            el('td', {}, c.created_at ? relativeTime(new Date(c.created_at)) : '—'),
-          ));
-        }
-        chanTblWrap.innerHTML = '';
-        chanTblWrap.appendChild(tbl);
-      } catch (e) { chanTblWrap.innerHTML = '<p class="error">' + escapeHTML(e.message) + '</p>'; }
-    }
-    loadChannels();
-
-    // Create channel
-    const chanKindSel = el('select', { name: 'kind' },
-      el('option', { value: 'webhook' }, 'Webhook'),
-      el('option', { value: 'slack' }, 'Slack'),
-      el('option', { value: 'email' }, 'Email'),
-      el('option', { value: 'pushover' }, 'Pushover'),
-    );
-    const chanKindFields = el('div', { class: 'field-group' });
-    function renderChanFields() {
-      chanKindFields.innerHTML = '';
-      const kind = chanKindSel.value;
-      if (kind === 'webhook' || kind === 'slack') {
-        chanKindFields.appendChild(el('div', { class: 'field-row' },
-          el('label', {}, 'URL'), el('input', { name: 'config_url', type: 'url', required: true })));
-      } else if (kind === 'email') {
-        chanKindFields.append(
-          el('div', { class: 'field-row' }, el('label', {}, 'SMTP host'), el('input', { name: 'config_host', required: true })),
-          el('div', { class: 'field-row' }, el('label', {}, 'To address'), el('input', { name: 'config_to', type: 'email', required: true })),
-        );
-      } else if (kind === 'pushover') {
-        chanKindFields.append(
-          el('div', { class: 'field-row' }, el('label', {}, 'API token'), el('input', { name: 'config_token', required: true })),
-          el('div', { class: 'field-row' }, el('label', {}, 'User key'), el('input', { name: 'config_user_key', required: true })),
-        );
-      }
-    }
-    chanKindSel.addEventListener('change', renderChanFields);
-    renderChanFields();
-
-    const chanCreateDet = el('details', { style: 'margin-bottom:var(--space-4)' });
-    chanCreateDet.appendChild(el('summary', { style: 'cursor:pointer;font-weight:600;font-size:var(--font-size-sm)' }, '+ Create channel'));
-    const chanForm = el('form', { style: 'margin-top:10px;display:grid;gap:10px' },
-      el('div', { class: 'field-row' }, el('label', {}, 'Name'), el('input', { name: 'name', required: true })),
-      el('div', { class: 'field-row' }, el('label', {}, 'Kind'), chanKindSel),
-      chanKindFields,
-      el('button', { type: 'submit', class: 'btn' }, 'Create channel'),
-    );
-    chanForm.onsubmit = async (ev) => {
-      ev.preventDefault();
-      const fd = new FormData(chanForm);
-      const kind = fd.get('kind');
-      let config = {};
-      if (kind === 'webhook' || kind === 'slack') config = { url: fd.get('config_url') };
-      else if (kind === 'email') config = { host: fd.get('config_host'), to: fd.get('config_to') };
-      else if (kind === 'pushover') config = { token: fd.get('config_token'), user_key: fd.get('config_user_key') };
-      try {
-        await api('POST', '/notifications/channels', { name: fd.get('name'), kind, config });
-        chanForm.reset(); renderChanFields(); chanCreateDet.open = false; loadChannels();
-      } catch (err) { alert('Create failed: ' + err.message); }
-    };
-    chanCreateDet.appendChild(chanForm);
-    area.appendChild(chanCreateDet);
-
-    // Rules
-    area.appendChild(sectionDivider('Notification Rules'));
-    const rulesTblWrap = el('div', { class: 'table-wrapper' });
-    area.appendChild(rulesTblWrap);
-    try {
-      const rules = await api('GET', '/notifications/rules');
-      if (!rules || !rules.length) { rulesTblWrap.innerHTML = '<p class="muted" style="padding:8px">No rules configured.</p>'; }
-      else {
-        const tbl = el('table', { class: 'device-table' },
-          el('thead', {}, el('tr', {}, el('th', {}, 'Name'), el('th', {}, 'Event'), el('th', {}, 'Channel'))),
-          el('tbody'));
-        for (const r of rules) {
-          tbl.querySelector('tbody').appendChild(el('tr', {},
-            el('td', {}, escapeHTML(r.name || '—')),
-            el('td', {}, el('code', {}, escapeHTML(r.event_type || '—'))),
-            el('td', {}, '#' + (r.channel_id || '?')),
-          ));
-        }
-        rulesTblWrap.appendChild(tbl);
-      }
-    } catch (e) { rulesTblWrap.innerHTML = '<p class="error">' + escapeHTML(e.message) + '</p>'; }
-  }
-
-  // ---- API & Tokens ----
-  async function renderApiTokens(area) {
-    area.appendChild(el('h2', { style: 'margin-bottom:var(--space-3)' }, 'API & Tokens'));
-
-    area.appendChild(sectionDivider('API Tokens'));
-    const tokenTblWrap = el('div', { class: 'table-wrapper', style: 'margin-bottom:var(--space-3)' });
-    area.appendChild(tokenTblWrap);
-
-    async function loadTokens() {
-      tokenTblWrap.innerHTML = '<p class="muted">Loading…</p>';
-      try {
-        const tokens = await api('GET', '/api-tokens');
-        if (!tokens || !tokens.length) { tokenTblWrap.innerHTML = '<p class="muted">No tokens yet.</p>'; return; }
-        const tbl = el('table', { class: 'device-table' },
-          el('thead', {}, el('tr', {},
-            el('th', {}, 'Name'), el('th', {}, 'Prefix'), el('th', {}, 'Scopes'), el('th', {}, 'Expires'), el('th', {}, ''))),
-          el('tbody'));
-        for (const t of tokens) {
-          const expiry = t.expires_at ? (() => { const d = new Date(t.expires_at); return isNaN(d) ? '—' : d.toLocaleDateString(); })() : 'Never';
-          const tr = el('tr', {},
-            el('td', {}, escapeHTML(t.name || '—')),
-            el('td', {}, el('code', {}, escapeHTML(t.prefix || '—'))),
-            el('td', {}, Array.isArray(t.scopes) ? t.scopes.join(', ') : escapeHTML(String(t.scopes || ''))),
-            el('td', {}, expiry),
-            el('td', {}, (() => {
-              const d = el('button', { class: 'qa-btn' }, 'Revoke');
-              d.onclick = async () => {
-                if (!confirm('Revoke token "' + (t.name || t.id) + '"?')) return;
-                try { await api('DELETE', '/api-tokens/' + t.id); loadTokens(); }
-                catch (err) { alert(err.message); }
-              };
-              return d;
-            })()),
-          );
-          tbl.querySelector('tbody').appendChild(tr);
-        }
-        tokenTblWrap.innerHTML = '';
-        tokenTblWrap.appendChild(tbl);
-      } catch (e) { tokenTblWrap.innerHTML = '<p class="error">' + escapeHTML(e.message) + '</p>'; }
-    }
-    loadTokens();
-
-    // Create token form
-    const createDet = el('details', { style: 'margin-bottom:var(--space-4)' });
-    createDet.appendChild(el('summary', { style: 'cursor:pointer;font-weight:600;font-size:var(--font-size-sm)' }, '+ Generate new token'));
-    const tokenReveal = el('div', { hidden: true });
-    const scopeChecks = ['read', 'write', 'admin'].map(s => {
-      const cb = el('input', { type: 'checkbox', name: 'scope_' + s, id: 'scope_' + s });
-      if (s === 'read') cb.checked = true;
-      return el('label', { style: 'display:flex;align-items:center;gap:6px;font-size:var(--font-size-sm)' },
-        cb, s.charAt(0).toUpperCase() + s.slice(1));
-    });
-    const createForm = el('form', { style: 'margin-top:10px;display:grid;gap:10px' },
-      el('div', { class: 'field-row' }, el('label', {}, 'Name'), el('input', { name: 'name', required: true })),
-      el('div', { class: 'field-row' },
-        el('label', {}, 'Scopes'),
-        el('div', { style: 'display:flex;gap:16px;flex-wrap:wrap;margin-top:4px' }, ...scopeChecks)),
-      el('div', { class: 'field-row' }, el('label', {}, 'Expires'), el('input', { name: 'expires_at', type: 'date' }),
-        el('span', { class: 'help' }, 'Leave blank for non-expiring token.')),
-      el('button', { type: 'submit', class: 'btn' }, 'Generate token'),
-    );
-    createForm.onsubmit = async (ev) => {
-      ev.preventDefault();
-      const fd = new FormData(createForm);
-      const scopes = ['read', 'write', 'admin'].filter(s => fd.get('scope_' + s));
-      const body = { name: fd.get('name'), scopes };
-      if (fd.get('expires_at')) body.expires_at = new Date(fd.get('expires_at')).toISOString();
-      try {
-        const result = await api('POST', '/api-tokens', body);
-        const tok = result.token || result.raw_token || '(check API response)';
-        tokenReveal.hidden = false;
-        tokenReveal.innerHTML = '';
-        tokenReveal.append(
-          el('p', { style: 'font-weight:600;color:var(--status-ok);font-size:var(--font-size-sm)' }, '✓ Token created — copy it now, it will not be shown again.'),
-          el('div', { class: 'token-reveal' },
-            el('code', {}, escapeHTML(tok)),
-            (() => {
-              const btn = el('button', { class: 'copy-btn' }, 'Copy');
-              btn.onclick = () => { navigator.clipboard.writeText(tok); btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Copy'; }, 2000); };
-              return btn;
-            })()),
-        );
-        createForm.reset();
-        createDet.open = false;
-        loadTokens();
-      } catch (err) { alert('Error: ' + err.message); }
-    };
-    createDet.append(createForm, tokenReveal);
-    area.appendChild(createDet);
-
-    // OpenAPI docs link
-    area.appendChild(sectionDivider('API Documentation'));
-    area.append(
-      el('p', { style: 'font-size:var(--font-size-sm);margin-bottom:12px' },
-        'NetMantle provides a full OpenAPI 3 REST API. Use the interactive explorer to test endpoints, generate sample requests, and build integrations.'),
-      el('a', { href: '/api/docs', target: '_blank', rel: 'noopener', class: 'btn' }, '🔍 Open API Explorer →'),
-      el('p', { class: 'help', style: 'margin-top:8px' }, 'Authenticate via session cookie or Authorization: Bearer <token> header.'),
-    );
-
-    // Tenants
-    area.appendChild(sectionDivider('Tenants'));
-    const tenantWrap = el('div', { class: 'table-wrapper' });
-    area.appendChild(tenantWrap);
-    try {
-      const tenants = await api('GET', '/tenants');
-      if (!tenants || !tenants.length) { tenantWrap.innerHTML = '<p class="muted" style="padding:8px">No tenants.</p>'; }
-      else {
-        const tbl = el('table', { class: 'device-table' },
-          el('thead', {}, el('tr', {}, el('th', {}, 'ID'), el('th', {}, 'Name'), el('th', {}, 'Max Devices'), el('th', {}, 'Created'))),
-          el('tbody'));
-        for (const t of tenants) {
-          tbl.querySelector('tbody').appendChild(el('tr', {},
-            el('td', {}, '#' + t.id),
-            el('td', {}, escapeHTML(t.name || '—')),
-            el('td', {}, t.max_devices != null ? String(t.max_devices) : '—'),
-            el('td', {}, t.created_at ? relativeTime(new Date(t.created_at)) : '—'),
-          ));
-        }
-        tenantWrap.appendChild(tbl);
-      }
-    } catch (e) { tenantWrap.innerHTML = '<p class="error">' + escapeHTML(e.message) + '</p>'; }
-  }
-
-  // ---- Audit Logs ----
-  async function renderAuditLogs(area) {
-    area.appendChild(el('h2', { style: 'margin-bottom:var(--space-3)' }, 'Audit Logs'));
-
-    let autoRefresh = false;
-    let refreshTimer = null;
-
-    const filterInp = el('input', { type: 'search', id: 'audit-filter', placeholder: 'Filter by user or action…', style: 'flex:1;min-width:180px;padding:5px 10px;border:1px solid var(--border-default);border-radius:var(--radius-sm);font-size:var(--font-size-sm);background:var(--surface-card);color:var(--text-default)' });
-    const arInp = el('input', { type: 'checkbox' });
-    const arSw = el('label', { class: 'toggle-switch' }, arInp, el('span', { class: 'toggle-slider' }));
-    const arLabel = el('label', { class: 'toggle-row', style: 'gap:6px;font-size:var(--font-size-sm)' }, arSw, 'Auto-refresh (30s)');
-    arInp.addEventListener('change', () => {
-      autoRefresh = arInp.checked;
-      if (autoRefresh) refreshTimer = setInterval(loadAuditLogs, 30000);
-      else { clearInterval(refreshTimer); refreshTimer = null; }
-    });
-    const refreshBtn = el('button', { class: 'btn ghost' }, '↻ Refresh');
-    refreshBtn.onclick = loadAuditLogs;
-
-    area.appendChild(el('div', { style: 'display:flex;gap:10px;align-items:center;margin-bottom:10px;flex-wrap:wrap' },
-      filterInp, arLabel, refreshBtn));
-
-    const terminal = el('div', { class: 'audit-terminal' });
-    terminal.appendChild(el('div', { class: 'alog-row', style: 'font-weight:700;color:#8b949e;border-bottom:1px solid #30363d;padding-bottom:4px;margin-bottom:4px' },
-      el('span', {}, 'TIMESTAMP'), el('span', {}, 'USER'), el('span', {}, 'ACTION'), el('span', {}, 'TARGET')));
-    area.appendChild(terminal);
-
-    let allLogs = [];
-
-    async function loadAuditLogs() {
-      try {
-        const logs = await api('GET', '/audit/events?limit=200');
-        allLogs = logs || [];
-        renderLogs();
-      } catch (e) {
-        terminal.innerHTML = '<div style="color:#f87171;padding:8px">Error: ' + escapeHTML(e.message) + '</div>';
-      }
-    }
-
-    function renderLogs() {
-      const filter = filterInp.value.toLowerCase();
-      const filtered = filter
-        ? allLogs.filter(l => (l.actor || '').toLowerCase().includes(filter) || (l.action || '').toLowerCase().includes(filter))
-        : allLogs;
-      while (terminal.children.length > 1) terminal.removeChild(terminal.lastChild);
-      for (const log of filtered) {
-        const ts = log.created_at ? new Date(log.created_at).toLocaleString() : '—';
-        terminal.appendChild(el('div', { class: 'alog-row' },
-          el('span', { class: 'alog-ts' }, ts),
-          el('span', { class: 'alog-user' }, escapeHTML(log.actor || log.username || '—')),
-          el('span', { class: 'alog-action' }, escapeHTML(log.action || '—')),
-          el('span', { class: 'alog-target' }, escapeHTML(log.target || log.detail || '')),
-        ));
-      }
-      if (!filtered.length) terminal.appendChild(el('div', { style: 'color:#6e7681;padding:8px' }, 'No log entries found.'));
-      terminal.scrollTop = terminal.scrollHeight;
-    }
-
-    filterInp.addEventListener('input', renderLogs);
-    loadAuditLogs();
-
-    window.addEventListener('hashchange', () => { clearInterval(refreshTimer); }, { once: true });
-  }
-
-  // Remove save bar when navigating away
-  window.addEventListener('hashchange', () => { saveBar.remove(); }, { once: true });
-
-  showSection(initCat);
-};
-
-// ===========================================================
-// Dashboard
-// ===========================================================
-//
-// One server round-trip (`/dashboard/summary`) populates: stat cards with
-// inline SVG sparklines, the per-driver compliance bars, drift hotspots,
-// the recent-events timeline, and the cluster health card. No external
-// chart library — see app.css for the .dash-* / .driver-bar / .timeline
-// styles.
-views.dashboard = async (root) => {
-  root.appendChild(el('h2', {}, 'Dashboard'));
-  let s;
-  try { s = await api('GET', '/dashboard/summary'); }
-  catch (e) { root.appendChild(errorState('Error: ' + e.message)); return; }
-
-  const fmtPct = (v) => (v == null ? '—' : `${v.toFixed(1)}%`);
-  const fmtInt = (v) => (v == null ? '—' : v.toLocaleString());
-
-  // --- top stat row ---
-  const stats = el('div', { class: 'dash-grid' });
-  stats.append(
-    statCard('Devices', fmtInt(s.devices.total),
-      s.devices.added_recent ? `+${s.devices.added_recent} this week` : 'no new devices',
-      null),
-    statCard('Compliance', fmtPct(s.compliance.percent),
-      `${s.compliance.pass_count} pass · ${s.compliance.fail_count} fail`,
-      s.compliance.sparkline_14d),
-    statCard('Backups (24h)', fmtPct(s.backups.success_rate_24h),
-      `${s.backups.total_24h} run${s.backups.total_24h === 1 ? '' : 's'}`,
-      s.backups.sparkline_14d),
-    statCard('Approvals', String(s.approvals.pending),
-      s.approvals.oldest_age ? `oldest ${s.approvals.oldest_age}` : 'queue empty',
-      null),
-  );
-  root.appendChild(stats);
-
-  // --- two-column body ---
-  const body = el('div', { class: 'dash-cols' });
-
-  // Left column: status by driver, drift hotspots
-  const leftCol = el('div');
-  const driverCard = el('div', { class: 'card' },
-    el('h3', {}, 'Status by driver'));
-  if (!s.status_by_driver.length) {
-    driverCard.appendChild(el('p', { class: 'muted' }, 'No devices yet.'));
-  } else {
-    for (const d of s.status_by_driver) {
-      const fillCls = d.percent >= 90 ? 'ok' : (d.percent >= 70 ? 'warn' : 'bad');
-      driverCard.appendChild(el('div', { class: 'driver-bar' },
-        el('span', {}, `${d.driver} (${d.compliant}/${d.total})`),
-        el('span', { class: 'track' },
-          el('span', { class: 'fill ' + fillCls, style: `width:${d.percent}%` })),
-        el('span', { class: 'pct' }, `${d.percent}%`)));
-    }
-  }
-  leftCol.appendChild(driverCard);
-
-  const driftCard = el('div', { class: 'card' },
-    el('h3', {}, 'Drift hotspots'));
-  if (!s.drift_hotspots.length) {
-    driftCard.appendChild(el('p', { class: 'muted' }, 'No failing rules — nice.'));
-  } else {
-    for (const h of s.drift_hotspots) {
-      const link = el('a', { href: '#/inventory', class: 'hotspot' },
-        el('span', {},
-          el('span', { class: 'status-dot bad' }), ' ',
-          el('strong', {}, h.hostname || `device ${h.device_id}`),
-          ' ',
-          el('span', { class: 'detail' }, `${h.failing} failing`)),
-        el('span', { class: 'detail' }, h.top_detail || ''));
-      link.onclick = () => { setTimeout(() => showDevice(h.device_id), 50); };
-      driftCard.appendChild(link);
-    }
-  }
-  leftCol.appendChild(driftCard);
-  body.appendChild(leftCol);
-
-  // Right column: recent events, health
-  const rightCol = el('div');
-  const eventsCard = el('div', { class: 'card' },
-    el('h3', {}, 'Recent events'));
-  if (!s.recent_events.length) {
-    eventsCard.appendChild(el('p', { class: 'muted' }, 'No audit entries yet.'));
-  } else {
-    const list = el('ul', { class: 'timeline' });
-    for (const e of s.recent_events.slice(0, 10)) {
-      const t = new Date(e.created_at);
-      const hh = String(t.getHours()).padStart(2, '0');
-      const mm = String(t.getMinutes()).padStart(2, '0');
-      list.appendChild(el('li', {},
-        el('span', { class: 'when' }, `${hh}:${mm}`),
-        el('code', {}, e.action || ''),
-        el('span', { class: 'what' }, e.target || e.detail || '')));
-    }
-    eventsCard.appendChild(list);
-    eventsCard.appendChild(el('p', { class: 'muted' },
-      el('a', { href: '#/audit' }, 'See all in Audit →')));
-  }
-  rightCol.appendChild(eventsCard);
-
-  const healthCard = el('div', { class: 'card health' },
-    el('h3', {}, 'Health'),
-    el('dl', {},
-      el('dt', {}, 'Pollers'),
-      el('dd', {}, `${s.health.pollers_healthy}/${s.health.pollers_total} healthy`),
-      el('dt', {}, 'Git mirror'),
-      el('dd', {}, s.health.git_mirror.replace('_', ' '))));
-  rightCol.appendChild(healthCard);
-  body.appendChild(rightCol);
-
-  root.appendChild(body);
-
-  // Refresh approvals badge with the count we just fetched.
-  applyApprovalsBadge(s.approvals.pending);
-};
-
-// statCard returns a single .dash-stat tile. `series` may be null (no spark).
-function statCard(label, value, sub, series) {
-  const card = el('div', { class: 'dash-stat' },
-    el('div', { class: 'label' }, label),
-    el('div', { class: 'value' }, value));
-  if (series && series.length) card.appendChild(sparkline(series));
-  card.appendChild(el('div', { class: 'sub' }, sub));
-  return card;
-}
-
-// sparkline renders a 14-bucket SVG polyline with a soft fill underneath.
-// Hand-rolled to avoid pulling in a chart library — the design tokens
-// (--accent, --accent-soft) drive the colour so it themes for free.
-function sparkline(values) {
-  const W = 140, H = 32, PAD = 2;
-  const max = 100; // values are percentages 0..100
-  const n = values.length;
-  if (!n) return el('span');
-  const step = (W - PAD * 2) / (n - 1 || 1);
-  const pts = values.map((v, i) => {
-    const x = PAD + i * step;
-    const y = H - PAD - (Math.max(0, Math.min(max, v)) / max) * (H - PAD * 2);
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  });
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('class', 'spark');
-  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
-  svg.setAttribute('preserveAspectRatio', 'none');
-  // Filled area first, line on top.
-  const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-  poly.setAttribute('points', `${PAD},${H - PAD} ${pts.join(' ')} ${W - PAD},${H - PAD}`);
-  const line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
-  line.setAttribute('points', pts.join(' '));
-  svg.append(poly, line);
-  return svg;
-}
-
-// refreshApprovalsBadge fetches the pending-approvals count for the
-// sidebar badge. Called on session refresh; the dashboard view also
-// updates the badge from its summary payload to avoid an extra request.
-async function refreshApprovalsBadge() {
-  try {
-    const rows = await api('GET', '/change-requests?status=submitted');
-    applyApprovalsBadge((rows || []).length);
-  } catch (_) { /* ignore — badge stays hidden */ }
-}
-
-function applyApprovalsBadge(n) {
-  const b = $('#approvals-badge');
-  if (!b) return;
-  if (!n || n <= 0) { b.hidden = true; return; }
-  b.hidden = false;
-  b.textContent = String(n > 99 ? '99+' : n);
-}
-
-// ===========================================================
-// Login form + logout wiring
-// ===========================================================
-$('#login-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  $('#login-error').textContent = '';
-  const fd = new FormData(e.target);
-  try {
-    const res = await api('POST', '/auth/login', {
-      username: fd.get('username'),
-      password: fd.get('password'),
-    });
-    if (res && res.mfa_required) {
-      e.target.closest('section').dataset.mfaChallenge = res.mfa_challenge;
-      $('#login-form').hidden = true;
-      $('#mfa-step').hidden = false;
-      return;
-    }
-    e.target.reset();
-    await refreshSession();
-  } catch (err) {
-    $('#login-error').textContent = err.message;
-  }
-});
-
-$('#mfa-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const fd = new FormData(e.target);
-  const challenge = $('#login-view').dataset.mfaChallenge;
-  try {
-    await api('POST', '/auth/mfa-verify', { mfa_challenge: challenge, code: fd.get('code') });
-    $('#mfa-step').hidden = true;
-    $('#login-form').hidden = false;
-    await refreshSession();
-  } catch (err) {
-    $('#mfa-error').textContent = 'Invalid code. Try again.';
-  }
-});
-
-$('#logout').addEventListener('click', async () => {
-  try { await api('POST', '/auth/logout'); } catch (_) {}
   refreshSession();
 });
 
-// ---------- Zones ----------
-views.zones = async (root) => {
-  root.appendChild(el('div', { class: 'page-header' },
-    el('div', { class: 'page-header-left' },
-      el('div', { class: 'page-header-breadcrumb' }, 'Core Operations'),
-      el('div', { class: 'page-header-title' }, 'Zones & Remote Cores')),
-    el('div', { class: 'page-header-actions' },
-      el('a', { href: '#/settings', class: 'btn ghost' }, 'Settings →'))));
+// ==================================================================
+// VIEWS
+// ==================================================================
+const views = {};
 
-  const grid = el('div', { class: 'zones-grid' });
-  root.appendChild(grid);
-
+// ===== DASHBOARD =====
+views.dashboard = async (root) => {
+  root.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
   try {
-    const pollers = await api('GET', '/pollers');
-    if (!pollers || !pollers.length) {
-      grid.appendChild(el('div', { class: 'zone-card' },
-        el('div', { class: 'z-name' }, 'Local (this server)'),
-        el('div', { class: 'z-zone' }, 'Zone: default'),
-        el('div', { class: 'z-meta' },
-          el('span', { class: 'badge badge-ok' }, 'Healthy'),
-          el('span', { class: 'z-seen' }, 'Primary'))));
-    } else {
-      grid.appendChild(el('div', { class: 'zone-card' },
-        el('div', { class: 'z-name' }, 'Local Server'),
-        el('div', { class: 'z-zone' }, 'Zone: primary'),
-        el('div', { class: 'z-meta' }, el('span', { class: 'badge badge-ok' }, 'Healthy'), el('span', { class: 'z-seen' }, 'This server'))));
+    const summary = await api('GET', '/dashboard/summary');
+    root.innerHTML = '';
 
-      for (const p of pollers) {
-        const lastSeen = p.last_seen ? new Date(p.last_seen) : null;
-        const ageMs = lastSeen ? Date.now() - lastSeen.getTime() : Infinity;
-        const stCls = ageMs < 120000 ? 'ok' : ageMs < 600000 ? 'warn' : 'bad';
-        const stLabel = ageMs < 120000 ? 'Healthy' : ageMs < 600000 ? 'Stale' : 'Offline';
-        grid.appendChild(el('div', { class: 'zone-card' },
-          el('div', { class: 'z-name' }, escapeHTML(p.name || 'Remote Core')),
-          el('div', { class: 'z-zone' }, 'Zone: ' + escapeHTML(p.zone || '—')),
-          el('div', { class: 'z-meta' },
-            el('span', { class: 'badge badge-' + stCls }, stLabel),
-            el('span', { class: 'z-seen' }, lastSeen ? 'seen ' + relativeTime(lastSeen) : 'never'))));
+    // Page header
+    root.appendChild(el('div', { class: 'page-header' },
+      el('div', null,
+        el('h2', null, 'Dashboard'),
+        el('p', { class: 'subtitle' }, 'Network configuration health overview')
+      ),
+      el('div', { class: 'page-actions' },
+        el('button', { class: 'btn btn-primary', onclick: () => location.hash = '#/inventory' }, '+ Add Device')
+      )
+    ));
+
+    // KPI cards
+    const kpis = el('div', { class: 'kpi-grid' });
+    const total = summary.device_count || 0;
+    const lastOk = summary.last_backup_success || 0;
+    const lastFail = summary.last_backup_failed || 0;
+    const changes = summary.recent_changes || 0;
+    const compliance = summary.compliance_pass_rate;
+
+    kpis.appendChild(kpiCard('Total Devices', total, 'Managed inventory', 'info'));
+    kpis.appendChild(kpiCard('Backup Success', lastOk, `${lastFail} failed`, lastFail > 0 ? 'warn' : 'ok'));
+    kpis.appendChild(kpiCard('Recent Changes', changes, 'Last 24 hours', changes > 0 ? 'warn' : 'ok'));
+    if (compliance != null) kpis.appendChild(kpiCard('Compliance', Math.round(compliance) + '%', 'Pass rate', compliance >= 90 ? 'ok' : 'bad'));
+    root.appendChild(kpis);
+
+    // Recent changes table
+    root.appendChild(el('div', { class: 'section-title' }, 'RECENT CONFIGURATION CHANGES'));
+    try {
+      const changes_list = await api('GET', '/changes?limit=10');
+      if (changes_list && changes_list.length > 0) {
+        const wrap = el('div', { class: 'data-table-wrap' });
+        const table = el('table', { class: 'data-table' });
+        table.innerHTML = `<thead><tr><th>Device</th><th>Type</th><th>Time</th><th>Status</th></tr></thead>`;
+        const tbody = el('tbody');
+        for (const c of changes_list) {
+          tbody.appendChild(el('tr', null,
+            el('td', null, escHTML(c.device_name || c.device_id)),
+            el('td', null, el('span', { class: 'badge badge-neutral' }, escHTML(c.change_type || 'config'))),
+            el('td', { class: 'text-muted text-sm' }, timeAgo(c.detected_at || c.created_at)),
+            el('td', null, el('span', { class: `badge ${c.reviewed ? 'badge-ok' : 'badge-warn'}` }, c.reviewed ? 'Reviewed' : 'Pending'))
+          ));
+        }
+        table.appendChild(tbody);
+        wrap.appendChild(table);
+        root.appendChild(wrap);
+      } else {
+        root.appendChild(emptyState('No changes detected yet', 'Configuration diffs will appear here after backups run.'));
       }
+    } catch (_) {
+      root.appendChild(emptyState('No changes detected yet', 'Configuration diffs will appear here after backups run.'));
     }
-  } catch (e) {
-    grid.appendChild(el('p', { class: 'error' }, 'Error: ' + escapeHTML(e.message)));
-  }
 
-  root.appendChild(el('div', { class: 'card', style: 'margin-top:20px;padding:16px 20px' },
-    el('h3', { style: 'margin:0 0 8px' }, 'Deploying a Remote Core'),
-    el('p', { style: 'font-size:var(--font-size-sm);color:var(--text-muted);margin:0' },
-      'Run the netmantle binary on a remote site with the same DB config. Pollers self-register on startup and appear here automatically.')));
+  } catch (err) {
+    root.innerHTML = '';
+    root.appendChild(el('div', { class: 'empty-state' },
+      el('h3', null, 'Unable to load dashboard'),
+      el('p', null, err.message)
+    ));
+  }
 };
 
-// ---------- Config Search ----------
-views.search = (root) => {
-  const header = el('div', { class: 'page-header' },
-    el('div', { class: 'page-header-left' },
-      el('div', { class: 'page-header-breadcrumb' }, 'Automation & Intelligence'),
-      el('div', { class: 'page-header-title' }, 'Config Search')),
-    el('div', { class: 'page-header-actions' },
-      el('span', { style: 'font-size:var(--font-size-xs);color:var(--text-muted)' }, 'Search across all device configurations')));
-  root.appendChild(header);
+function kpiCard(label, value, sub, variant) {
+  return el('div', { class: `kpi-card ${variant || ''}` },
+    el('div', { class: 'kpi-label' }, label),
+    el('div', { class: 'kpi-value' }, String(value)),
+    el('div', { class: 'kpi-sub' }, sub)
+  );
+}
 
-  const searchWrap = el('div', { class: 'search-bar-wrap' },
-    el('input', { type: 'search', id: 'cfg-search-input', placeholder: 'Search all configs: VLAN 100, 192.168.1.1, password, ntp server…', autofocus: true }),
-    el('select', { id: 'cfg-search-scope' },
-      el('option', { value: 'all' }, 'All devices'),
-      el('option', { value: 'latest' }, 'Latest config only')),
-    el('button', { class: 'btn', id: 'cfg-search-btn' }, '🔍 Search'));
-  root.appendChild(searchWrap);
+function emptyState(title, desc) {
+  return el('div', { class: 'empty-state' },
+    el('h3', null, title),
+    el('p', null, desc)
+  );
+}
 
-  const statsEl = el('div', { style: 'font-size:var(--font-size-xs);color:var(--text-muted);margin-bottom:12px', id: 'search-stats' });
-  const results = el('div', { id: 'cfg-search-results' });
-  root.append(statsEl, results);
+// ===== DEVICES / INVENTORY =====
+views.inventory = async (root) => {
+  root.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
 
-  if (window._globalSearchQuery) {
-    $('#cfg-search-input').value = window._globalSearchQuery;
-    window._globalSearchQuery = null;
-    runSearch();
+  let devices = [], credentials = [], groups = [];
+  try {
+    [devices, credentials, groups] = await Promise.all([
+      api('GET', '/devices'),
+      api('GET', '/credentials').catch(() => []),
+      api('GET', '/device-groups').catch(() => [])
+    ]);
+    devices = devices || [];
+  } catch (err) {
+    root.innerHTML = '';
+    root.appendChild(emptyState('Failed to load devices', err.message));
+    return;
   }
 
-  async function runSearch() {
-    const q = ($('#cfg-search-input') || { value: '' }).value.trim();
-    if (!q) return;
-    results.innerHTML = '<p class="muted">Searching…</p>';
-    statsEl.textContent = '';
+  root.innerHTML = '';
+
+  // State
+  let search = '', statusFilter = 'all', vendorFilter = 'all', page = 0;
+  const pageSize = 50;
+  let selectedIds = new Set();
+
+  // Header
+  root.appendChild(el('div', { class: 'page-header' },
+    el('div', null,
+      el('h2', null, 'Devices'),
+      el('p', { class: 'subtitle' }, `${devices.length} managed device${devices.length !== 1 ? 's' : ''}`)
+    ),
+    el('div', { class: 'page-actions' },
+      el('button', { class: 'btn btn-secondary', onclick: () => openExportModal(devices) }, 'Export'),
+      el('button', { class: 'btn btn-primary', onclick: showAddDevice }, '+ Add Device')
+    )
+  ));
+
+  // Filter bar
+  const filterBar = el('div', { class: 'filter-bar' });
+  const searchInput = el('input', { type: 'search', placeholder: 'Search name, IP, vendor… (vendor:mikrotik status:fail)', autocomplete: 'off' });
+  searchInput.addEventListener('input', () => { search = searchInput.value; page = 0; render(); });
+
+  const statusSel = el('select', { class: '' });
+  statusSel.innerHTML = '<option value="all">All Status</option><option value="ok">Success</option><option value="fail">Failed</option><option value="never">Never backed up</option>';
+  statusSel.addEventListener('change', () => { statusFilter = statusSel.value; page = 0; render(); });
+
+  const vendorSel = el('select');
+  const vendors = [...new Set(devices.map(d => d.driver).filter(Boolean))].sort();
+  vendorSel.innerHTML = '<option value="all">All Vendors</option>' + vendors.map(v => `<option value="${escHTML(v)}">${escHTML(v)}</option>`).join('');
+  vendorSel.addEventListener('change', () => { vendorFilter = vendorSel.value; page = 0; render(); });
+
+  const countEl = el('span', { class: 'filter-count' });
+  filterBar.append(searchInput, statusSel, vendorSel, countEl);
+  root.appendChild(filterBar);
+
+  // Table
+  const tableWrap = el('div', { class: 'data-table-wrap' });
+  const table = el('table', { class: 'data-table' });
+  const thead = el('thead');
+  thead.innerHTML = `<tr>
+    <th class="col-check"><input type="checkbox" id="select-all"></th>
+    <th class="col-status"></th>
+    <th>Name</th>
+    <th>Address</th>
+    <th>Driver</th>
+    <th>Last Backup</th>
+    <th>Status</th>
+    <th class="col-actions">Actions</th>
+  </tr>`;
+  const selectAll = $('input', thead);
+  selectAll.addEventListener('change', () => {
+    const filtered = getFiltered();
+    if (selectAll.checked) filtered.forEach(d => selectedIds.add(d.id));
+    else selectedIds.clear();
+    render();
+  });
+  table.appendChild(thead);
+  const tbody = el('tbody');
+  table.appendChild(tbody);
+  tableWrap.appendChild(table);
+  root.appendChild(tableWrap);
+
+  // Pagination
+  const pagBar = el('div', { class: 'pagination' });
+  root.appendChild(pagBar);
+
+  function getFiltered() {
+    let list = devices;
+    // Property-based search
+    const terms = search.toLowerCase().split(/\s+/).filter(Boolean);
+    if (terms.length) {
+      list = list.filter(d => {
+        return terms.every(term => {
+          if (term.startsWith('vendor:') || term.startsWith('driver:')) {
+            return (d.driver || '').toLowerCase().includes(term.split(':')[1]);
+          }
+          if (term.startsWith('status:')) {
+            const sv = term.split(':')[1];
+            if (sv === 'ok' || sv === 'success') return d.last_backup_status === 'success';
+            if (sv === 'fail' || sv === 'failed') return d.last_backup_status === 'failed';
+            return true;
+          }
+          if (term.startsWith('ip:')) return (d.address || '').includes(term.split(':')[1]);
+          if (term.startsWith('tag:') || term.startsWith('group:')) {
+            return (d.tags || []).some(t => t.toLowerCase().includes(term.split(':')[1]));
+          }
+          const hay = `${d.hostname || ''} ${d.address || ''} ${d.driver || ''} ${(d.tags || []).join(' ')}`.toLowerCase();
+          return hay.includes(term);
+        });
+      });
+    }
+    if (statusFilter === 'ok') list = list.filter(d => d.last_backup_status === 'success');
+    else if (statusFilter === 'fail') list = list.filter(d => d.last_backup_status === 'failed');
+    else if (statusFilter === 'never') list = list.filter(d => !d.last_backup_at);
+    if (vendorFilter !== 'all') list = list.filter(d => d.driver === vendorFilter);
+    return list;
+  }
+
+  function render() {
+    const filtered = getFiltered();
+    countEl.textContent = `${filtered.length} of ${devices.length}`;
+    const totalPages = Math.ceil(filtered.length / pageSize);
+    const start = page * pageSize;
+    const pageItems = filtered.slice(start, start + pageSize);
+
+    tbody.innerHTML = '';
+    if (pageItems.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="8" class="text-center text-muted" style="padding:32px">No devices match your filters.</td></tr>`;
+    }
+    for (const d of pageItems) {
+      const status = d.last_backup_status === 'success' ? 'ok' : d.last_backup_status === 'failed' ? 'bad' : 'idle';
+      const checked = selectedIds.has(d.id);
+      const tr = el('tr', { onclick: (e) => { if (e.target.type !== 'checkbox' && !e.target.closest('.row-actions')) openSlideover(d); } },
+        el('td', { class: 'col-check' }, el('input', { type: 'checkbox', checked: checked || undefined, onchange: (e) => { e.stopPropagation(); if (e.target.checked) selectedIds.add(d.id); else selectedIds.delete(d.id); } })),
+        el('td', { class: 'col-status' }, el('span', { class: `status-dot ${status}${status === 'ok' ? '' : status === 'bad' ? '' : ''}` })),
+        el('td', null, el('span', { class: 'font-mono', style: 'font-weight:500' }, escHTML(d.hostname || d.address))),
+        el('td', { class: 'text-muted font-mono text-sm' }, escHTML(d.address)),
+        el('td', null, el('span', { class: 'badge badge-neutral' }, escHTML(d.driver || '—'))),
+        el('td', { class: 'text-muted text-sm' }, d.last_backup_at ? timeAgo(d.last_backup_at) : '—'),
+        el('td', null, statusBadge(d.last_backup_status)),
+        el('td', { class: 'col-actions' },
+          el('div', { class: 'row-actions' },
+            el('button', { title: 'Backup now', onclick: (e) => { e.stopPropagation(); triggerBackup(d); } }, '⟳'),
+            el('button', { title: 'View config', onclick: (e) => { e.stopPropagation(); openSlideover(d, 'backups'); } }, '◎'),
+            el('button', { title: 'Delete', onclick: (e) => { e.stopPropagation(); deleteDevice(d); } }, '✕')
+          )
+        )
+      );
+      tbody.appendChild(tr);
+    }
+
+    // Pagination
+    pagBar.innerHTML = '';
+    pagBar.appendChild(el('span', null, `Page ${page + 1} of ${totalPages || 1}`));
+    const btns = el('div', { class: 'pagination-buttons' });
+    btns.appendChild(el('button', { disabled: page === 0 || undefined, onclick: () => { page--; render(); } }, '← Prev'));
+    btns.appendChild(el('button', { disabled: page >= totalPages - 1 || undefined, onclick: () => { page++; render(); } }, 'Next →'));
+    pagBar.appendChild(btns);
+  }
+
+  render();
+
+  function statusBadge(s) {
+    if (s === 'success') return el('span', { class: 'badge badge-ok' }, 'OK');
+    if (s === 'failed') return el('span', { class: 'badge badge-bad' }, 'FAIL');
+    return el('span', { class: 'badge badge-neutral' }, 'N/A');
+  }
+
+  async function triggerBackup(d) {
     try {
-      const hits = await api('GET', '/search?q=' + encodeURIComponent(q));
-      results.innerHTML = '';
-      if (!hits || !hits.length) {
-        results.innerHTML = '<p class="muted">No results found for "' + escapeHTML(q) + '".</p>';
-        statsEl.textContent = '0 results';
+      await api('POST', `/devices/${d.id}/backup`);
+      toast('Backup triggered', 'ok');
+    } catch (err) { toast(err.message, 'bad'); }
+  }
+
+  async function deleteDevice(d) {
+    if (!confirm(`Delete device "${d.hostname || d.address}"?`)) return;
+    try {
+      await api('DELETE', `/devices/${d.id}`);
+      devices = devices.filter(x => x.id !== d.id);
+      render();
+      toast('Device deleted', 'ok');
+    } catch (err) { toast(err.message, 'bad'); }
+  }
+
+  function showAddDevice() {
+    const overlay = el('div', { class: 'modal-overlay' });
+    const modal = el('div', { class: 'modal' });
+    modal.innerHTML = `
+      <div class="modal-header"><h3>Add Device</h3><button class="slideover-close" id="modal-close">×</button></div>
+      <div class="modal-body">
+        <div class="form-group"><label class="form-label">Hostname</label><input class="form-input" name="hostname" placeholder="router-core-01" required></div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Address (IP/Host)</label><input class="form-input" name="address" placeholder="192.168.1.1" required></div>
+          <div class="form-group"><label class="form-label">Port</label><input class="form-input" name="port" type="number" value="22"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group"><label class="form-label">Driver</label><select class="form-select" name="driver"></select></div>
+          <div class="form-group"><label class="form-label">Credential</label><select class="form-select" name="credential_id"></select></div>
+        </div>
+        <div class="form-group"><label class="form-label">Tags (comma-separated)</label><input class="form-input" name="tags" placeholder="core, dc-1"></div>
+      </div>
+      <div class="modal-footer"><button class="btn btn-secondary" id="modal-cancel">Cancel</button><button class="btn btn-primary" id="modal-save">Save Device</button></div>
+    `;
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    // Populate selects
+    const driverSel = $('select[name=driver]', modal);
+    api('GET', '/drivers').then(drivers => {
+      driverSel.innerHTML = (drivers || []).map(d => `<option value="${escHTML(d.id)}">${escHTML(d.name || d.id)}</option>`).join('');
+    }).catch(() => { driverSel.innerHTML = '<option>generic_ssh</option>'; });
+
+    const credSel = $('select[name=credential_id]', modal);
+    credSel.innerHTML = '<option value="">— none —</option>' + (credentials || []).map(c => `<option value="${c.id}">${escHTML(c.label || c.username)}</option>`).join('');
+
+    const close = () => overlay.remove();
+    $('#modal-close', modal).onclick = close;
+    $('#modal-cancel', modal).onclick = close;
+    overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+
+    $('#modal-save', modal).onclick = async () => {
+      const hostname = $('input[name=hostname]', modal).value.trim();
+      const address = $('input[name=address]', modal).value.trim();
+      const port = parseInt($('input[name=port]', modal).value) || 22;
+      const driver = driverSel.value;
+      const credential_id = credSel.value ? parseInt(credSel.value) : undefined;
+      const tags = $('input[name=tags]', modal).value.split(',').map(s => s.trim()).filter(Boolean);
+      if (!hostname || !address) { toast('Hostname and address required', 'bad'); return; }
+      try {
+        const dev = await api('POST', '/devices', { hostname, address, port, driver, credential_id, tags });
+        devices.push(dev);
+        render();
+        close();
+        toast('Device created', 'ok');
+      } catch (err) { toast(err.message, 'bad'); }
+    };
+  }
+};
+
+// ===== SLIDEOVER (Device Detail Panel) =====
+function openSlideover(device, tab = 'info') {
+  window._slideoverDevice = device;
+  const slideEl = $('#device-slideover');
+  const overlay = $('#slideover-overlay');
+  if (!slideEl || !overlay) return;
+  slideEl.hidden = false;
+  overlay.hidden = false;
+  $('#slideover-title').textContent = device.hostname || device.address;
+  $('#slideover-sub').textContent = `${device.address} · ${device.driver || 'unknown'}`;
+  $$('.slideover-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  renderSlideoverTab(device, tab);
+}
+
+async function renderSlideoverTab(device, tab) {
+  const body = $('#slideover-body');
+  if (!body) return;
+  body.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+  try {
+    if (tab === 'info') {
+      body.innerHTML = '';
+      const info = [
+        ['Hostname', device.hostname],
+        ['Address', device.address],
+        ['Port', device.port],
+        ['Driver', device.driver],
+        ['Tags', (device.tags || []).join(', ') || '—'],
+        ['Last Backup', device.last_backup_at ? fmtDate(device.last_backup_at) : 'Never'],
+        ['Status', device.last_backup_status || 'N/A'],
+        ['Created', fmtDate(device.created_at)],
+      ];
+      const dl = el('div', { style: 'display:grid; grid-template-columns: 120px 1fr; gap:8px 12px; font-size:0.8rem;' });
+      for (const [k, v] of info) {
+        dl.appendChild(el('span', { class: 'text-muted', style: 'font-weight:600' }, k));
+        dl.appendChild(el('span', { class: 'font-mono' }, String(v || '—')));
+      }
+      body.appendChild(dl);
+
+    } else if (tab === 'backups') {
+      const versions = await api('GET', `/devices/${device.id}/config/versions`).catch(() => null);
+      body.innerHTML = '';
+      if (!versions || versions.length === 0) {
+        body.appendChild(emptyState('No backups yet', 'Trigger a backup to capture the first config snapshot.'));
         return;
       }
-      statsEl.textContent = `${hits.length} device(s) matched "${q}"`;
-
-      for (const h of hits) {
-        const card = el('div', { class: 'search-result' });
-        // Header row with device info
-        const badge = el('span', { class: 'badge ok', style: 'font-size:0.6rem' }, 'match');
-        const hdr = el('div', { class: 'search-result-header' },
-          el('div', { style: 'display:flex;align-items:center;gap:8px' },
-            badge,
-            el('strong', {}, escapeHTML(h.hostname || h.device_hostname || 'Device #' + h.device_id)),
-            el('code', { style: 'font-size:0.65rem;color:var(--text-muted)' }, escapeHTML(h.driver || '')),
-            el('span', { style: 'font-size:0.7rem;color:var(--text-muted)' }, h.address || '')),
-          el('div', { style: 'display:flex;gap:8px;align-items:center' },
-            h.commit_sha ? el('code', { style: 'font-size:0.6rem;color:var(--text-muted)' }, h.commit_sha.slice(0, 8)) : null,
-            el('button', { class: 'btn ghost', style: 'font-size:0.65rem;padding:2px 8px' }, '📋 View device')));
-
-        // Snippet body with line numbers
-        const body = el('div', { class: 'search-result-body' });
-        const raw = h.snippet || h.context || '';
-        if (raw) {
-          const lines = raw.split('\n');
-          const snippet = el('div', { class: 'search-snippet' });
-          const lineOffset = h.line_number || 1;
-          for (let i = 0; i < lines.length; i++) {
-            const lineNum = lineOffset + i;
-            const lineEl = el('div', { class: 'search-line' });
-            lineEl.appendChild(el('span', { class: 'search-lineno' }, String(lineNum)));
-            const content = el('span', { class: 'search-linecontent' });
-            // Highlight the search term
-            const escaped = escapeHTML(lines[i]);
-            const re = new RegExp('(' + q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
-            content.innerHTML = escaped.replace(re, '<mark class="search-highlight">$1</mark>');
-            lineEl.appendChild(content);
-            snippet.appendChild(lineEl);
-          }
-          body.appendChild(snippet);
-        }
-
-        // View device button action
-        const viewBtn = hdr.querySelector('.btn');
-        if (viewBtn) {
-          viewBtn.onclick = (e) => {
-            e.stopPropagation();
-            const devObj = { id: h.device_id, hostname: h.hostname || h.device_hostname, driver: h.driver, address: h.address, port: h.port || 22 };
-            openSlideOver(devObj);
-          };
-        }
-
-        hdr.onclick = () => { body.hidden = !body.hidden; };
-        card.append(hdr, body);
-        results.appendChild(card);
+      const timeline = el('div', { class: 'timeline' });
+      for (const v of versions) {
+        const item = el('div', { class: `timeline-item ${v.changed ? 'changed' : ''}` },
+          el('div', { class: 'tl-date' }, fmtDate(v.date || v.timestamp)),
+          el('div', { class: 'tl-title' }, v.message || (v.changed ? 'Configuration changed' : 'No change')),
+          el('div', { class: 'tl-actions' },
+            el('button', { class: 'btn btn-xs btn-secondary', onclick: () => viewConfig(device, v.sha) }, 'View'),
+            el('button', { class: 'btn btn-xs btn-ghost', onclick: () => downloadConfig(device, v.sha) }, 'Download'),
+            el('button', { class: 'btn btn-xs btn-ghost', onclick: () => rollbackDevice(device, v.sha) }, 'Rollback')
+          )
+        );
+        timeline.appendChild(item);
       }
-    } catch (e) { results.innerHTML = '<p class="error">' + escapeHTML(e.message) + '</p>'; }
-  }
+      body.appendChild(timeline);
 
-  $('#cfg-search-btn').addEventListener('click', runSearch);
-  $('#cfg-search-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') runSearch(); });
-};
-
-// ---------- Notifications ----------
-views.notifications = async (root) => {
-  root.appendChild(el('div', { class: 'page-header' },
-    el('div', { class: 'page-header-left' },
-      el('div', { class: 'page-header-breadcrumb' }, 'System'),
-      el('div', { class: 'page-header-title' }, 'Notifications'))));
-
-  root.appendChild(el('div', { class: 'section-divider' }, 'Channels'));
-  const chanTblWrap = el('div', { class: 'table-wrapper', style: 'margin-bottom:var(--space-4)' });
-  root.appendChild(chanTblWrap);
-  async function loadChannels() {
-    chanTblWrap.innerHTML = '<p class="muted" style="padding:8px">Loading…</p>';
-    try {
-      const channels = await api('GET', '/notifications/channels');
-      if (!channels || !channels.length) { chanTblWrap.innerHTML = '<p class="muted" style="padding:8px">No channels yet.</p>'; return; }
-      const tbl = el('table', { class: 'device-table' },
-        el('thead', {}, el('tr', {}, el('th', {}, 'Name'), el('th', {}, 'Kind'), el('th', {}, 'Created'))),
-        el('tbody'));
-      for (const c of channels) {
-        tbl.querySelector('tbody').appendChild(el('tr', {},
-          el('td', {}, escapeHTML(c.name)), el('td', {}, el('code', {}, escapeHTML(c.kind))),
-          el('td', {}, c.created_at ? relativeTime(new Date(c.created_at)) : '—')));
+    } else if (tab === 'diffs') {
+      const changes = await api('GET', `/changes?device_id=${device.id}&limit=20`).catch(() => []);
+      body.innerHTML = '';
+      if (!changes || changes.length === 0) {
+        body.appendChild(emptyState('No diffs', 'Diffs appear when configuration changes are detected.'));
+        return;
       }
-      chanTblWrap.innerHTML = ''; chanTblWrap.appendChild(tbl);
-    } catch (e) { chanTblWrap.innerHTML = '<p class="error">' + escapeHTML(e.message) + '</p>'; }
-  }
-  loadChannels();
-
-  const addDet = el('details');
-  addDet.appendChild(el('summary', { style: 'cursor:pointer;font-weight:600;font-size:var(--font-size-sm)' }, '+ Add channel'));
-  const kindSel = el('select', { name: 'kind' }, el('option', { value: 'webhook' }, 'Webhook'), el('option', { value: 'slack' }, 'Slack'), el('option', { value: 'email' }, 'Email'), el('option', { value: 'pushover' }, 'Pushover'));
-  const kindFields = el('div');
-  function renderKF() {
-    kindFields.innerHTML = '';
-    if (kindSel.value === 'webhook' || kindSel.value === 'slack') kindFields.appendChild(el('label', {}, 'URL ', el('input', { name: 'config_url', type: 'url', required: true })));
-    else if (kindSel.value === 'email') kindFields.append(el('label', {}, 'SMTP host ', el('input', { name: 'config_host', required: true })), el('label', {}, 'To ', el('input', { name: 'config_to', type: 'email', required: true })));
-    else kindFields.append(el('label', {}, 'API token ', el('input', { name: 'config_token', required: true })), el('label', {}, 'User key ', el('input', { name: 'config_user_key', required: true })));
-  }
-  kindSel.addEventListener('change', renderKF); renderKF();
-  const cf = el('form', { style: 'margin-top:10px;display:grid;gap:8px' },
-    el('label', {}, 'Name ', el('input', { name: 'name', required: true })),
-    el('label', {}, 'Kind ', kindSel), kindFields,
-    el('button', { type: 'submit', class: 'btn' }, 'Create'));
-  cf.onsubmit = async (ev) => {
-    ev.preventDefault();
-    const fd = new FormData(cf);
-    const kind = fd.get('kind');
-    const config = kind === 'webhook' || kind === 'slack' ? { url: fd.get('config_url') } :
-      kind === 'email' ? { host: fd.get('config_host'), to: fd.get('config_to') } :
-      { token: fd.get('config_token'), user_key: fd.get('config_user_key') };
-    try { await api('POST', '/notifications/channels', { name: fd.get('name'), kind, config }); cf.reset(); renderKF(); addDet.open = false; loadChannels(); }
-    catch (err) { alert(err.message); }
-  };
-  addDet.appendChild(cf); root.appendChild(addDet);
-
-  root.appendChild(el('div', { class: 'section-divider', style: 'margin-top:20px' }, 'Rules'));
-  try {
-    const rules = await api('GET', '/notifications/rules');
-    if (!rules || !rules.length) { root.appendChild(el('p', { class: 'muted' }, 'No rules configured.')); }
-    else {
-      const tbl = el('table', { class: 'device-table' },
-        el('thead', {}, el('tr', {}, el('th', {}, 'Name'), el('th', {}, 'Event'), el('th', {}, 'Channel'))),
-        el('tbody'));
-      for (const r of rules) {
-        tbl.querySelector('tbody').appendChild(el('tr', {},
-          el('td', {}, escapeHTML(r.name || '—')), el('td', {}, el('code', {}, escapeHTML(r.event_type || '—'))), el('td', {}, '#' + (r.channel_id || '?'))));
+      for (const c of changes) {
+        const card = el('div', { style: 'margin-bottom:12px' },
+          el('div', { class: 'flex justify-between items-center', style: 'margin-bottom:6px' },
+            el('span', { class: 'text-sm font-mono' }, fmtDate(c.detected_at || c.created_at)),
+            el('button', { class: 'btn btn-xs btn-secondary', onclick: () => loadDiff(c, body) }, 'View Diff')
+          )
+        );
+        body.appendChild(card);
       }
-      const wrap = el('div', { class: 'table-wrapper' }); wrap.appendChild(tbl); root.appendChild(wrap);
+
+    } else if (tab === 'log') {
+      const runs = await api('GET', `/devices/${device.id}/runs?limit=20`).catch(() => []);
+      body.innerHTML = '';
+      if (!runs || runs.length === 0) {
+        body.appendChild(emptyState('No logs', 'Backup run logs will appear here.'));
+        return;
+      }
+      const terminal = el('div', { class: 'terminal-view' });
+      for (const r of runs) {
+        const cls = r.status === 'success' ? 't-success' : r.status === 'failed' ? 't-error' : 't-info';
+        terminal.appendChild(el('div', { class: cls },
+          `[${fmtDate(r.started_at)}] ${r.status} — ${r.duration_ms || 0}ms`
+        ));
+        if (r.error) terminal.appendChild(el('div', { class: 't-error' }, `  Error: ${r.error}`));
+      }
+      body.appendChild(terminal);
     }
-  } catch (e) { root.appendChild(el('p', { class: 'error' }, escapeHTML(e.message))); }
+  } catch (err) {
+    body.innerHTML = '';
+    body.appendChild(el('p', { class: 'error' }, err.message));
+  }
+}
+
+async function viewConfig(device, sha) {
+  const body = $('#slideover-body');
+  body.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  try {
+    const config = await api('GET', `/devices/${device.id}/config${sha ? '?sha=' + sha : ''}`);
+    body.innerHTML = '';
+    const toolbar = el('div', { class: 'flex justify-between items-center', style: 'margin-bottom:10px' },
+      el('span', { class: 'text-sm text-muted' }, `Config @ ${sha ? sha.slice(0, 8) : 'latest'}`),
+      el('div', { class: 'flex gap-8' },
+        el('button', { class: 'btn btn-xs btn-secondary', onclick: () => downloadBlob(config, `${device.hostname || 'config'}.cfg`) }, 'Download'),
+        el('button', { class: 'btn btn-xs btn-ghost', onclick: () => { navigator.clipboard.writeText(config); toast('Copied', 'ok'); } }, 'Copy')
+      )
+    );
+    body.appendChild(toolbar);
+    const view = el('div', { class: 'config-view' });
+    const lines = String(config).split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      view.appendChild(el('div', { class: 'config-line' },
+        el('span', { class: 'config-lineno' }, String(i + 1)),
+        el('span', { class: 'config-text' }, lines[i])
+      ));
+    }
+    body.appendChild(view);
+  } catch (err) { body.innerHTML = `<p class="error">${escHTML(err.message)}</p>`; }
+}
+
+async function downloadConfig(device, sha) {
+  try {
+    const config = await api('GET', `/devices/${device.id}/config${sha ? '?sha=' + sha : ''}`);
+    downloadBlob(config, `${device.hostname || 'config'}-${(sha || 'latest').slice(0, 8)}.cfg`);
+    toast('Downloaded', 'ok');
+  } catch (err) { toast(err.message, 'bad'); }
+}
+
+async function rollbackDevice(device, sha) {
+  if (!confirm(`Rollback ${device.hostname || device.address} to version ${sha.slice(0, 8)}?`)) return;
+  try {
+    await api('POST', `/devices/${device.id}/rollback`, { target_sha: sha });
+    toast('Rollback initiated', 'ok');
+  } catch (err) { toast(err.message, 'bad'); }
+}
+
+async function loadDiff(change, container) {
+  try {
+    const diff = await api('GET', `/changes/${change.id}/diff`);
+    container.innerHTML = '';
+    container.appendChild(renderDiff(diff));
+  } catch (err) { container.innerHTML = `<p class="error">${escHTML(err.message)}</p>`; }
+}
+
+function renderDiff(diffText) {
+  const wrap = el('div', { class: 'diff-container' });
+  const header = el('div', { class: 'diff-header' },
+    el('span', null, 'Unified Diff'),
+    el('button', { class: 'btn btn-xs btn-ghost', style: 'color:#8b949e', onclick: () => { navigator.clipboard.writeText(diffText); toast('Copied', 'ok'); } }, 'Copy')
+  );
+  wrap.appendChild(header);
+  const body = el('div', { class: 'diff-body' });
+  const lines = String(diffText).split('\n');
+  let lineNum = 0;
+  for (const line of lines) {
+    lineNum++;
+    let cls = '';
+    if (line.startsWith('+')) cls = 'add';
+    else if (line.startsWith('-')) cls = 'del';
+    else if (line.startsWith('@@')) cls = 'hunk';
+    body.appendChild(el('div', { class: `diff-line ${cls}` },
+      el('span', { class: 'diff-lineno' }, String(lineNum)),
+      el('span', { class: 'diff-content' }, line)
+    ));
+  }
+  wrap.appendChild(body);
+  return wrap;
+}
+
+function downloadBlob(text, filename) {
+  const blob = new Blob([text], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// ===== EXPORT MODAL =====
+function openExportModal(devices) {
+  const overlay = el('div', { class: 'modal-overlay' });
+  const modal = el('div', { class: 'modal' });
+  modal.innerHTML = `
+    <div class="modal-header"><h3>Export Configurations</h3><button class="slideover-close" id="exp-close">×</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label class="form-label">Format</label>
+        <select class="form-select" name="format">
+          <option value="text">Plain Text (.cfg)</option>
+          <option value="json">JSON</option>
+          <option value="zip">ZIP Archive</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label class="form-label">From Date</label><input class="form-input" name="from" type="date"></div>
+        <div class="form-group"><label class="form-label">To Date</label><input class="form-input" name="to" type="date"></div>
+      </div>
+      <p class="text-xs text-muted">${devices.length} device(s) selected. Latest config will be exported.</p>
+    </div>
+    <div class="modal-footer"><button class="btn btn-secondary" id="exp-cancel">Cancel</button><button class="btn btn-primary" id="exp-download">Download</button></div>
+  `;
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  $('#exp-close', modal).onclick = close;
+  $('#exp-cancel', modal).onclick = close;
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+
+  $('#exp-download', modal).onclick = async () => {
+    const format = $('select[name=format]', modal).value;
+    const from = $('input[name=from]', modal).value;
+    const to = $('input[name=to]', modal).value;
+    const ids = devices.map(d => d.id);
+    try {
+      const body = { device_ids: ids, format };
+      if (from) body.from_date = from;
+      if (to) body.to_date = to;
+      const resp = await fetch('/api/v1/export/configs', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (!resp.ok) throw new Error('Export failed');
+      const blob = await resp.blob();
+      const ext = format === 'zip' ? 'zip' : format === 'json' ? 'json' : 'cfg';
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `netmantle-export.${ext}`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      close();
+      toast('Export complete', 'ok');
+    } catch (err) { toast(err.message, 'bad'); }
+  };
+}
+
+// ===== ZONES =====
+views.zones = async (root) => {
+  root.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  try {
+    const pollers = await api('GET', '/pollers');
+    root.innerHTML = '';
+    root.appendChild(el('div', { class: 'page-header' },
+      el('div', null,
+        el('h2', null, 'Zones'),
+        el('p', { class: 'subtitle' }, 'Remote polling infrastructure')
+      ),
+      el('div', { class: 'page-actions' },
+        el('button', { class: 'btn btn-primary', onclick: () => registerPoller() }, '+ Register Poller')
+      )
+    ));
+
+    if (!pollers || pollers.length === 0) {
+      root.appendChild(emptyState('No remote pollers', 'Register a remote polling core to manage devices behind NAT/firewalls.'));
+      return;
+    }
+
+    const grid = el('div', { class: 'kpi-grid' });
+    for (const p of pollers) {
+      const alive = p.last_seen_at && (Date.now() - new Date(p.last_seen_at)) < 120000;
+      grid.appendChild(el('div', { class: `kpi-card ${alive ? 'ok' : 'bad'}` },
+        el('div', { class: 'flex items-center gap-8' },
+          el('span', { class: `status-dot ${alive ? 'ok pulse' : 'bad'}` }),
+          el('span', { class: 'kpi-label', style: 'margin:0' }, escHTML(p.name || p.id))
+        ),
+        el('div', { class: 'kpi-sub', style: 'margin-top:8px' }, `Last seen: ${p.last_seen_at ? timeAgo(p.last_seen_at) : 'never'}`),
+        el('div', { class: 'kpi-sub' }, `Devices: ${p.device_count || 0}`)
+      ));
+    }
+    root.appendChild(grid);
+  } catch (err) {
+    root.innerHTML = '';
+    root.appendChild(emptyState('Failed to load zones', err.message));
+  }
+
+  function registerPoller() {
+    const overlay = el('div', { class: 'modal-overlay' });
+    const modal = el('div', { class: 'modal' });
+    modal.innerHTML = `
+      <div class="modal-header"><h3>Register Poller</h3><button class="slideover-close" id="rp-close">×</button></div>
+      <div class="modal-body">
+        <div class="form-group"><label class="form-label">Name</label><input class="form-input" name="name" placeholder="DC-East" required></div>
+        <div class="form-group"><label class="form-label">Address</label><input class="form-input" name="address" placeholder="poller.east.internal:50051"></div>
+      </div>
+      <div class="modal-footer"><button class="btn btn-secondary" id="rp-cancel">Cancel</button><button class="btn btn-primary" id="rp-save">Register</button></div>
+    `;
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    $('#rp-close', modal).onclick = close;
+    $('#rp-cancel', modal).onclick = close;
+    $('#rp-save', modal).onclick = async () => {
+      const name = $('input[name=name]', modal).value.trim();
+      const address = $('input[name=address]', modal).value.trim();
+      if (!name) return;
+      try {
+        await api('POST', '/pollers', { name, address });
+        close();
+        toast('Poller registered', 'ok');
+        views.zones(root);
+      } catch (err) { toast(err.message, 'bad'); }
+    };
+  }
 };
 
-// ---------- Users ----------
-views.users = async (root) => {
+// ===== AUTOMATION (Mass Config Push) =====
+views.automation = async (root) => {
+  root.innerHTML = '';
+  let step = 0; // 0=select, 1=script, 2=preflight, 3=execute
+
   root.appendChild(el('div', { class: 'page-header' },
-    el('div', { class: 'page-header-left' },
-      el('div', { class: 'page-header-breadcrumb' }, 'System'),
-      el('div', { class: 'page-header-title' }, 'Users & Access Control')),
-    el('div', { class: 'page-header-actions' },
-      el('button', { class: 'btn', id: 'add-user-btn' }, '+ Add user'))));
+    el('div', null,
+      el('h2', null, 'Mass Config Push'),
+      el('p', { class: 'subtitle' }, 'Deploy configuration scripts to multiple devices')
+    )
+  ));
 
-  const tblWrap = el('div', { class: 'table-wrapper' });
-  root.appendChild(tblWrap);
+  // Steps indicator
+  const stepsEl = el('div', { class: 'wizard-steps' });
+  const stepNames = ['Select Targets', 'Write Script', 'Preflight', 'Execute'];
+  root.appendChild(stepsEl);
 
-  async function loadUsers() {
-    tblWrap.innerHTML = '<p class="muted" style="padding:8px">Loading…</p>';
+  const content = el('div');
+  root.appendChild(content);
+
+  // State
+  let selectedDevices = [];
+  let script = '';
+  let verifyCmd = '';
+  let rollbackScript = '';
+
+  renderStep();
+
+  function updateSteps() {
+    stepsEl.innerHTML = '';
+    for (let i = 0; i < stepNames.length; i++) {
+      const cls = i < step ? 'done' : i === step ? 'active' : '';
+      stepsEl.appendChild(el('div', { class: `wizard-step ${cls}` },
+        el('span', { class: 'step-num' }, i < step ? '✓' : String(i + 1)),
+        el('span', null, stepNames[i])
+      ));
+    }
+  }
+
+  function renderStep() {
+    updateSteps();
+    content.innerHTML = '';
+
+    if (step === 0) renderTargetSelect();
+    else if (step === 1) renderScriptEditor();
+    else if (step === 2) renderPreflight();
+    else if (step === 3) renderExecute();
+  }
+
+  function renderTargetSelect() {
+    content.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+    api('GET', '/devices').then(devices => {
+      content.innerHTML = '';
+      const card = el('div', { class: 'card' });
+      card.appendChild(el('div', { class: 'card-header' }, 'Select target devices'));
+      const body = el('div', { class: 'card-body' });
+
+      const searchWrap = el('div', { style: 'margin-bottom:10px' });
+      const searchIn = el('input', { type: 'search', class: 'form-input', placeholder: 'Filter devices…' });
+      searchWrap.appendChild(searchIn);
+      body.appendChild(searchWrap);
+
+      const list = el('div', { style: 'max-height:300px; overflow-y:auto; border:1px solid var(--border-default); border-radius:var(--radius-sm)' });
+      const selectedSet = new Set(selectedDevices.map(d => d.id));
+
+      function renderList(filter = '') {
+        list.innerHTML = '';
+        const f = filter.toLowerCase();
+        for (const d of (devices || [])) {
+          if (f && !`${d.hostname} ${d.address} ${d.driver}`.toLowerCase().includes(f)) continue;
+          const checked = selectedSet.has(d.id);
+          const row = el('label', { style: 'display:flex; align-items:center; gap:8px; padding:6px 10px; border-bottom:1px solid var(--border-default); font-size:0.78rem; cursor:pointer' },
+            el('input', { type: 'checkbox', checked: checked || undefined, onchange: (e) => {
+              if (e.target.checked) selectedSet.add(d.id);
+              else selectedSet.delete(d.id);
+            }}),
+            el('span', { class: 'font-mono' }, escHTML(d.hostname || d.address)),
+            el('span', { class: 'text-muted' }, escHTML(d.address))
+          );
+          list.appendChild(row);
+        }
+      }
+      renderList();
+      searchIn.addEventListener('input', () => renderList(searchIn.value));
+      body.appendChild(list);
+
+      body.appendChild(el('div', { style: 'margin-top:12px; text-align:right' },
+        el('button', { class: 'btn btn-primary', onclick: () => {
+          selectedDevices = (devices || []).filter(d => selectedSet.has(d.id));
+          if (selectedDevices.length === 0) { toast('Select at least one device', 'bad'); return; }
+          step = 1; renderStep();
+        }}, `Next → (${selectedSet.size} selected)`)
+      ));
+
+      card.appendChild(body);
+      content.appendChild(card);
+    }).catch(err => { content.innerHTML = `<p class="error">${escHTML(err.message)}</p>`; });
+  }
+
+  function renderScriptEditor() {
+    const card = el('div', { class: 'card' });
+    card.appendChild(el('div', { class: 'card-header' }, 'Configuration Script'));
+    const body = el('div', { class: 'card-body' });
+
+    body.appendChild(el('div', { class: 'form-group' },
+      el('label', { class: 'form-label' }, 'Commands (vendor CLI)'),
+      el('textarea', { class: 'form-textarea', name: 'script', rows: '10', placeholder: '/ip address add address={{customer_ip}} interface=ether1\n# Use {{var}} for dynamic variables', style: 'font-family:var(--font-config)' })
+    ));
+    body.appendChild(el('div', { class: 'form-hint' }, 'Use {{variable}} syntax for dynamic values. Supported variables will be detected automatically.'));
+
+    body.appendChild(el('div', { class: 'section-title' }, 'SAFE MODE (optional)'));
+    body.appendChild(el('div', { class: 'form-group' },
+      el('label', { class: 'form-label' }, 'Verify Command'),
+      el('input', { class: 'form-input', name: 'verify', placeholder: 'ping 8.8.8.8 count=1' })
+    ));
+    body.appendChild(el('div', { class: 'form-group' },
+      el('label', { class: 'form-label' }, 'Rollback Script (if verify fails)'),
+      el('textarea', { class: 'form-textarea', name: 'rollback', rows: '4', style: 'font-family:var(--font-config)' })
+    ));
+
+    body.appendChild(el('div', { style: 'margin-top:16px; display:flex; justify-content:space-between' },
+      el('button', { class: 'btn btn-secondary', onclick: () => { step = 0; renderStep(); } }, '← Back'),
+      el('button', { class: 'btn btn-primary', onclick: () => {
+        script = $('textarea[name=script]', body).value.trim();
+        verifyCmd = $('input[name=verify]', body).value.trim();
+        rollbackScript = $('textarea[name=rollback]', body).value.trim();
+        if (!script) { toast('Script is required', 'bad'); return; }
+        step = 2; renderStep();
+      }}, 'Run Preflight →')
+    ));
+
+    card.appendChild(body);
+    content.appendChild(card);
+  }
+
+  async function renderPreflight() {
+    const card = el('div', { class: 'card' });
+    card.appendChild(el('div', { class: 'card-header' }, 'Preflight Connectivity Check'));
+    const body = el('div', { class: 'card-body' });
+    body.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+    card.appendChild(body);
+    content.appendChild(card);
+
     try {
-      const users = await api('GET', '/users');
-      if (!users || !users.length) { tblWrap.innerHTML = '<p class="muted" style="padding:8px">No users found.</p>'; return; }
-      const tbl = el('table', { class: 'device-table' },
-        el('thead', {}, el('tr', {}, el('th', {}, 'Username'), el('th', {}, 'Role'), el('th', {}, 'Tenant'), el('th', {}, 'MFA'), el('th', {}, 'Created'), el('th', {}, ''))),
-        el('tbody'));
-      for (const u of users) {
-        const roleCls = u.role === 'admin' ? 'admin' : u.role === 'operator' ? 'operator' : 'viewer';
-        tbl.querySelector('tbody').appendChild(el('tr', {},
-          el('td', {}, el('strong', {}, escapeHTML(u.username))),
-          el('td', {}, el('span', { class: 'role-badge ' + roleCls }, u.role || '—')),
-          el('td', {}, u.tenant_id ? '#' + u.tenant_id : '—'),
-          el('td', {}, u.totp_enabled ? el('span', { class: 'badge badge-ok' }, '✓ MFA') : el('span', { class: 'badge' }, 'off')),
-          el('td', {}, u.created_at ? relativeTime(new Date(u.created_at)) : '—'),
-          el('td', {}, (() => {
-            const d = el('button', { class: 'qa-btn' }, 'Delete');
-            d.onclick = async () => {
-              if (!confirm('Delete user "' + u.username + '"? This cannot be undone.')) return;
-              try { await api('DELETE', '/users/' + u.id); loadUsers(); }
-              catch (err) { alert(err.message); }
-            };
-            return d;
-          })()),
+      const results = await api('POST', '/push/jobs/' + 0 + '/preflight', { device_ids: selectedDevices.map(d => d.id) }).catch(() => null);
+      body.innerHTML = '';
+
+      const table = el('table', { class: 'data-table' });
+      table.innerHTML = '<thead><tr><th>Device</th><th>Address</th><th>Status</th></tr></thead>';
+      const tb = el('tbody');
+      let allOk = true;
+
+      for (const d of selectedDevices) {
+        const r = results ? results.find(x => x.device_id === d.id) : null;
+        const ok = r ? r.reachable : true;
+        if (!ok) allOk = false;
+        tb.appendChild(el('tr', null,
+          el('td', { class: 'font-mono' }, escHTML(d.hostname || d.address)),
+          el('td', { class: 'text-muted' }, escHTML(d.address)),
+          el('td', null, el('span', { class: `badge ${ok ? 'badge-ok' : 'badge-bad'}` }, ok ? 'Reachable' : 'Unreachable'))
         ));
       }
-      tblWrap.innerHTML = '';
-      tblWrap.appendChild(tbl);
-    } catch (e) { tblWrap.innerHTML = '<p class="error">' + escapeHTML(e.message) + '</p>'; }
+      table.appendChild(tb);
+      body.appendChild(table);
+
+      body.appendChild(el('div', { style: 'margin-top:16px; display:flex; justify-content:space-between' },
+        el('button', { class: 'btn btn-secondary', onclick: () => { step = 1; renderStep(); } }, '← Back'),
+        el('button', { class: 'btn btn-primary', onclick: () => { step = 3; renderStep(); } }, allOk ? 'Execute →' : 'Execute Anyway →')
+      ));
+    } catch (err) {
+      body.innerHTML = `<p class="text-muted">Preflight skipped (${escHTML(err.message)}). Proceeding to execution.</p>`;
+      body.appendChild(el('div', { style: 'margin-top:16px; display:flex; justify-content:space-between' },
+        el('button', { class: 'btn btn-secondary', onclick: () => { step = 1; renderStep(); } }, '← Back'),
+        el('button', { class: 'btn btn-primary', onclick: () => { step = 3; renderStep(); } }, 'Execute →')
+      ));
+    }
   }
-  loadUsers();
 
-  const addSection = el('div', { id: 'add-user-section', hidden: true, class: 'card', style: 'margin-top:16px;padding:16px 20px' });
-  addSection.appendChild(el('h3', { style: 'margin:0 0 12px' }, 'Create user'));
-  const addForm = el('form', { style: 'display:grid;gap:10px;max-width:400px' },
-    el('label', {}, 'Username ', el('input', { name: 'username', required: true })),
-    el('label', {}, 'Password ', el('input', { name: 'password', type: 'password', required: true })),
-    el('label', {}, 'Role ',
-      el('select', { name: 'role' },
-        el('option', { value: 'viewer' }, 'Viewer'),
-        el('option', { value: 'operator' }, 'Operator'),
-        el('option', { value: 'admin' }, 'Admin'))),
-    el('button', { type: 'submit', class: 'btn' }, 'Create user'),
-  );
-  addForm.onsubmit = async (ev) => {
-    ev.preventDefault();
-    const fd = new FormData(addForm);
+  function renderExecute() {
+    const card = el('div', { class: 'card' });
+    card.appendChild(el('div', { class: 'card-header' },
+      el('span', null, 'Execution Console'),
+      el('span', { class: 'badge badge-info' }, `${selectedDevices.length} targets`)
+    ));
+    const body = el('div', { class: 'card-body' });
+
+    // Progress
+    const progressWrap = el('div', { style: 'margin-bottom:16px' });
+    const progressLabel = el('div', { class: 'text-xs text-muted', style: 'margin-bottom:4px' }, 'Starting…');
+    const progressBar = el('div', { class: 'progress-bar' }, el('div', { class: 'progress-fill', style: 'width:0%' }));
+    progressWrap.append(progressLabel, progressBar);
+    body.appendChild(progressWrap);
+
+    // Terminal output
+    const terminal = el('div', { class: 'terminal-view', style: 'max-height:350px' });
+    body.appendChild(terminal);
+
+    card.appendChild(body);
+    content.appendChild(card);
+
+    // Execute
+    executePush(terminal, progressLabel, progressBar);
+  }
+
+  async function executePush(terminal, progressLabel, progressBar) {
+    const total = selectedDevices.length;
+    let done = 0, failed = 0;
+
+    function log(msg, cls = '') {
+      terminal.appendChild(el('div', { class: cls }, msg));
+      terminal.scrollTop = terminal.scrollHeight;
+    }
+
     try {
-      await api('POST', '/users', { username: fd.get('username'), password: fd.get('password'), role: fd.get('role') });
-      addForm.reset(); addSection.hidden = true; loadUsers();
-    } catch (err) { alert('Error: ' + err.message); }
-  };
-  addSection.appendChild(addForm);
-  root.appendChild(addSection);
+      const job = await api('POST', '/push/jobs', {
+        name: 'Mass push ' + new Date().toISOString().slice(0, 16),
+        template: script,
+        device_ids: selectedDevices.map(d => d.id),
+        verify_command: verifyCmd || undefined,
+        rollback_template: rollbackScript || undefined
+      });
 
-  root.querySelector('#add-user-btn').onclick = () => { addSection.hidden = !addSection.hidden; };
+      log(`[INFO] Job created: #${job.id}`, 't-info');
+      log(`[INFO] Executing on ${total} device(s)…`, 't-info');
 
-  root.appendChild(el('div', { class: 'card', style: 'margin-top:16px;padding:16px 20px' },
-    el('h3', { style: 'margin:0 0 8px' }, 'Roles'),
-    el('dl', { style: 'display:grid;grid-template-columns:100px 1fr;gap:6px 12px;font-size:var(--font-size-sm)' },
-      el('dt', {}, el('span', { class: 'role-badge admin' }, 'admin')), el('dd', { style: 'margin:0' }, 'Full access to all resources and settings.'),
-      el('dt', {}, el('span', { class: 'role-badge operator' }, 'operator')), el('dd', { style: 'margin:0' }, 'Can backup, push configs, and view compliance. Cannot manage users or tenants.'),
-      el('dt', {}, el('span', { class: 'role-badge viewer' }, 'viewer')), el('dd', { style: 'margin:0' }, 'Read-only access to device configs and compliance reports.'),
-    )));
+      // Try running the job
+      try {
+        await api('POST', `/push/jobs/${job.id}/run`);
+        log('[SUCCESS] Job submitted for execution.', 't-success');
+        progressLabel.textContent = 'Job submitted — check device logs for results.';
+        progressBar.querySelector('.progress-fill').style.width = '100%';
+        progressBar.querySelector('.progress-fill').classList.add('ok');
+      } catch (err) {
+        log(`[WARN] ${err.message}`, 't-warn');
+        log('[INFO] Job may require approval. Check the Approvals page.', 't-info');
+        progressLabel.textContent = 'Awaiting approval';
+        progressBar.querySelector('.progress-fill').style.width = '100%';
+      }
+    } catch (err) {
+      log(`[ERROR] ${err.message}`, 't-error');
+      progressLabel.textContent = 'Failed';
+    }
+  }
 };
 
-initTheme();
-refreshSession();
+// ===== COMPLIANCE =====
+views.compliance = async (root) => {
+  root.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  try {
+    const [rules, findings, rulepacks] = await Promise.all([
+      api('GET', '/compliance/rules').catch(() => []),
+      api('GET', '/compliance/findings').catch(() => []),
+      api('GET', '/compliance/rulepacks').catch(() => [])
+    ]);
+    root.innerHTML = '';
+
+    root.appendChild(el('div', { class: 'page-header' },
+      el('div', null,
+        el('h2', null, 'Compliance'),
+        el('p', { class: 'subtitle' }, 'Configuration policy enforcement')
+      ),
+      el('div', { class: 'page-actions' },
+        el('button', { class: 'btn btn-primary', onclick: () => addRule() }, '+ Add Rule')
+      )
+    ));
+
+    // Summary KPIs
+    const pass = (findings || []).filter(f => f.status === 'pass').length;
+    const fail = (findings || []).filter(f => f.status === 'fail' || f.status === 'critical').length;
+    const warn = (findings || []).filter(f => f.status === 'warning').length;
+    const kpis = el('div', { class: 'kpi-grid' });
+    kpis.appendChild(kpiCard('Total Rules', (rules || []).length, 'Active policies', 'info'));
+    kpis.appendChild(kpiCard('Passing', pass, 'Compliant', 'ok'));
+    kpis.appendChild(kpiCard('Warnings', warn, 'Non-critical', 'warn'));
+    kpis.appendChild(kpiCard('Violations', fail, 'Requires action', 'bad'));
+    root.appendChild(kpis);
+
+    // Tabs
+    const tabsEl = el('div', { class: 'tabs' });
+    const rulesBtn = el('button', { class: 'tab-btn active', onclick: () => showTab('rules') }, 'Rules');
+    const findingsBtn = el('button', { class: 'tab-btn', onclick: () => showTab('findings') }, 'Findings');
+    const packsBtn = el('button', { class: 'tab-btn', onclick: () => showTab('packs') }, 'Rule Packs');
+    tabsEl.append(rulesBtn, findingsBtn, packsBtn);
+    root.appendChild(tabsEl);
+
+    const tabContent = el('div');
+    root.appendChild(tabContent);
+
+    function showTab(t) {
+      [rulesBtn, findingsBtn, packsBtn].forEach(b => b.classList.remove('active'));
+      if (t === 'rules') { rulesBtn.classList.add('active'); renderRules(); }
+      else if (t === 'findings') { findingsBtn.classList.add('active'); renderFindings(); }
+      else { packsBtn.classList.add('active'); renderPacks(); }
+    }
+
+    function renderRules() {
+      tabContent.innerHTML = '';
+      if (!rules || rules.length === 0) { tabContent.appendChild(emptyState('No rules', 'Create compliance rules to audit your configs.')); return; }
+      const wrap = el('div', { class: 'data-table-wrap' });
+      const table = el('table', { class: 'data-table' });
+      table.innerHTML = '<thead><tr><th>Name</th><th>Pattern</th><th>Severity</th><th>Actions</th></tr></thead>';
+      const tbody = el('tbody');
+      for (const r of rules) {
+        tbody.appendChild(el('tr', null,
+          el('td', { style: 'font-weight:500' }, escHTML(r.name)),
+          el('td', { class: 'font-mono text-sm' }, escHTML(r.pattern || r.regex || '—')),
+          el('td', null, el('span', { class: `badge badge-${r.severity === 'critical' ? 'bad' : r.severity === 'warning' ? 'warn' : 'info'}` }, escHTML(r.severity || 'info'))),
+          el('td', null, el('button', { class: 'btn btn-xs btn-danger', onclick: () => deleteRule(r.id) }, 'Delete'))
+        ));
+      }
+      table.appendChild(tbody);
+      wrap.appendChild(table);
+      tabContent.appendChild(wrap);
+    }
+
+    function renderFindings() {
+      tabContent.innerHTML = '';
+      if (!findings || findings.length === 0) { tabContent.appendChild(emptyState('No findings', 'Run compliance checks to see results.')); return; }
+      for (const f of findings.slice(0, 50)) {
+        const cls = f.status === 'fail' || f.status === 'critical' ? 'critical' : f.status === 'warning' ? 'warning' : 'pass';
+        tabContent.appendChild(el('div', { class: `finding-card ${cls}` },
+          el('div', { class: 'flex justify-between items-center' },
+            el('strong', { class: 'text-sm' }, escHTML(f.rule_name || f.rule_id)),
+            el('span', { class: `badge badge-${cls === 'critical' ? 'bad' : cls === 'warning' ? 'warn' : 'ok'}` }, escHTML(f.status))
+          ),
+          el('div', { class: 'text-xs text-muted', style: 'margin-top:4px' }, escHTML(f.device_name || `Device #${f.device_id}`)),
+          f.detail ? el('div', { class: 'text-xs font-mono', style: 'margin-top:4px; color:var(--text-muted)' }, escHTML(f.detail)) : null
+        ));
+      }
+    }
+
+    function renderPacks() {
+      tabContent.innerHTML = '';
+      if (!rulepacks || rulepacks.length === 0) { tabContent.appendChild(emptyState('No rule packs', 'Rule packs provide pre-built compliance checks.')); return; }
+      const grid = el('div', { class: 'grid-3' });
+      for (const p of rulepacks) {
+        grid.appendChild(el('div', { class: 'card' },
+          el('div', { class: 'card-body' },
+            el('div', { style: 'font-weight:600; margin-bottom:4px' }, escHTML(p.name)),
+            el('div', { class: 'text-xs text-muted' }, escHTML(p.description || `${p.rule_count || 0} rules`)),
+            el('button', { class: 'btn btn-xs btn-secondary', style: 'margin-top:8px', onclick: () => applyPack(p.name) }, 'Apply')
+          )
+        ));
+      }
+      tabContent.appendChild(grid);
+    }
+
+    showTab('rules');
+
+    async function addRule() {
+      const name = prompt('Rule name:');
+      if (!name) return;
+      const pattern = prompt('Regex pattern to check:');
+      if (!pattern) return;
+      try {
+        await api('POST', '/compliance/rules', { name, pattern, severity: 'warning', must_match: true });
+        toast('Rule created', 'ok');
+        views.compliance(root);
+      } catch (err) { toast(err.message, 'bad'); }
+    }
+
+    async function deleteRule(id) {
+      if (!confirm('Delete this rule?')) return;
+      try { await api('DELETE', `/compliance/rules/${id}`); toast('Deleted', 'ok'); views.compliance(root); } catch (err) { toast(err.message, 'bad'); }
+    }
+
+    async function applyPack(name) {
+      try { await api('POST', `/compliance/rulepacks/${name}/apply`); toast('Rule pack applied', 'ok'); } catch (err) { toast(err.message, 'bad'); }
+    }
+
+  } catch (err) {
+    root.innerHTML = '';
+    root.appendChild(emptyState('Failed to load compliance', err.message));
+  }
+};
+
+// ===== CONFIG SEARCH =====
+views.search = async (root) => {
+  root.innerHTML = '';
+  root.appendChild(el('div', { class: 'page-header' },
+    el('h2', null, 'Config Search'),
+    el('p', { class: 'subtitle' }, 'Search across all device configurations')
+  ));
+
+  const searchBar = el('div', { class: 'filter-bar' });
+  const input = el('input', { type: 'search', placeholder: 'Search configs (e.g. "VLAN 100", "ip route 0.0.0.0")…', value: window._searchQuery || '' });
+  const btn = el('button', { class: 'btn btn-primary' }, 'Search');
+  searchBar.append(input, btn);
+  root.appendChild(searchBar);
+  window._searchQuery = '';
+
+  const results = el('div');
+  root.appendChild(results);
+
+  async function doSearch() {
+    const q = input.value.trim();
+    if (!q) return;
+    results.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+    try {
+      const data = await api('GET', '/search?q=' + encodeURIComponent(q));
+      results.innerHTML = '';
+      if (!data || data.length === 0) {
+        results.appendChild(emptyState('No results', `No configurations contain "${q}".`));
+        return;
+      }
+      results.appendChild(el('p', { class: 'text-xs text-muted', style: 'margin-bottom:12px' }, `${data.length} result(s) found`));
+      for (const r of data) {
+        const card = el('div', { class: 'search-result' });
+        const header = el('div', { class: 'search-result-header' },
+          el('div', { class: 'flex items-center gap-8' },
+            el('span', { class: 'badge badge-neutral' }, escHTML(r.driver || '')),
+            el('strong', null, escHTML(r.device_name || r.hostname || `Device #${r.device_id}`)),
+            el('span', { class: 'text-muted' }, escHTML(r.address || ''))
+          ),
+          el('button', { class: 'btn btn-xs btn-secondary', onclick: (e) => {
+            e.stopPropagation();
+            api('GET', '/devices/' + r.device_id).then(d => openSlideover(d)).catch(() => {});
+          }}, 'View Device')
+        );
+        const body = el('div', { class: 'search-result-body' });
+        const snippet = el('div', { class: 'search-snippet' });
+        const lines = (r.snippet || r.context || '').split('\n');
+        for (let i = 0; i < lines.length; i++) {
+          const lineNo = (r.line_number || 1) + i;
+          const highlighted = lines[i].replace(new RegExp(escRegex(q), 'gi'), m => `<mark>${escHTML(m)}</mark>`);
+          snippet.appendChild(el('div', { class: 'search-line' },
+            el('span', { class: 'search-lineno' }, String(lineNo)),
+            el('span', { class: 'search-content', html: highlighted })
+          ));
+        }
+        body.appendChild(snippet);
+        header.addEventListener('click', () => body.hidden = !body.hidden);
+        card.append(header, body);
+        results.appendChild(card);
+      }
+    } catch (err) { results.innerHTML = `<p class="error">${escHTML(err.message)}</p>`; }
+  }
+
+  btn.addEventListener('click', doSearch);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+  if (input.value) doSearch();
+};
+
+function escRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+// ===== APPROVALS =====
+views.approvals = async (root) => {
+  root.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  try {
+    const crs = await api('GET', '/change-requests');
+    root.innerHTML = '';
+    root.appendChild(el('div', { class: 'page-header' },
+      el('h2', null, 'Approvals'),
+      el('p', { class: 'subtitle' }, 'Change request review queue')
+    ));
+
+    if (!crs || crs.length === 0) {
+      root.appendChild(emptyState('No change requests', 'Push jobs requiring approval will appear here.'));
+      return;
+    }
+
+    const wrap = el('div', { class: 'data-table-wrap' });
+    const table = el('table', { class: 'data-table' });
+    table.innerHTML = '<thead><tr><th>#</th><th>Title</th><th>Author</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>';
+    const tbody = el('tbody');
+    for (const cr of crs) {
+      const statusCls = cr.status === 'approved' ? 'badge-ok' : cr.status === 'rejected' ? 'badge-bad' : cr.status === 'submitted' ? 'badge-warn' : 'badge-neutral';
+      tbody.appendChild(el('tr', null,
+        el('td', null, `#${cr.id}`),
+        el('td', { style: 'font-weight:500' }, escHTML(cr.title || cr.description || 'Untitled')),
+        el('td', { class: 'text-muted' }, escHTML(cr.author || '—')),
+        el('td', null, el('span', { class: `badge ${statusCls}` }, escHTML(cr.status))),
+        el('td', { class: 'text-muted text-sm' }, timeAgo(cr.created_at)),
+        el('td', null, cr.status === 'submitted' ? el('div', { class: 'flex gap-8' },
+          el('button', { class: 'btn btn-xs btn-primary', onclick: () => approveReject(cr.id, 'approve') }, 'Approve'),
+          el('button', { class: 'btn btn-xs btn-danger', onclick: () => approveReject(cr.id, 'reject') }, 'Reject')
+        ) : el('span', { class: 'text-muted text-xs' }, '—'))
+      ));
+    }
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+    root.appendChild(wrap);
+  } catch (err) {
+    root.innerHTML = '';
+    root.appendChild(emptyState('Failed to load approvals', err.message));
+  }
+
+  async function approveReject(id, action) {
+    try {
+      await api('POST', `/change-requests/${id}/${action}`);
+      toast(`Change request ${action}d`, 'ok');
+      refreshApprovalsBadge();
+      views.approvals(root);
+    } catch (err) { toast(err.message, 'bad'); }
+  }
+};
+
+// ===== AUDIT LOG =====
+views.audit = async (root) => {
+  root.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  try {
+    const logs = await api('GET', '/audit');
+    root.innerHTML = '';
+    root.appendChild(el('div', { class: 'page-header' },
+      el('h2', null, 'Audit Log'),
+      el('p', { class: 'subtitle' }, 'System-wide mutation log')
+    ));
+
+    if (!logs || logs.length === 0) {
+      root.appendChild(emptyState('No audit entries', 'Actions will be recorded here.'));
+      return;
+    }
+
+    const terminal = el('div', { class: 'terminal-view', style: 'max-height:calc(100vh - 180px)' });
+    for (const entry of logs) {
+      const cls = entry.action && entry.action.includes('delete') ? 't-error' : entry.action && entry.action.includes('create') ? 't-success' : 't-info';
+      terminal.appendChild(el('div', { class: cls },
+        `[${fmtDate(entry.timestamp || entry.created_at)}] ${entry.actor || entry.username || '?'} → ${entry.action || '?'}${entry.resource ? ' on ' + entry.resource : ''}`
+      ));
+    }
+    root.appendChild(terminal);
+  } catch (err) {
+    root.innerHTML = '';
+    root.appendChild(emptyState('Failed to load audit log', err.message));
+  }
+};
+
+// ===== USERS =====
+views.users = async (root) => {
+  root.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+  try {
+    const users = await api('GET', '/auth/me').then(u => u.role === 'admin' ? api('GET', '/tenants').catch(() => null) : null);
+    // Fallback — show current user
+    root.innerHTML = '';
+    root.appendChild(el('div', { class: 'page-header' },
+      el('h2', null, 'Users & Access'),
+      el('p', { class: 'subtitle' }, 'User management and RBAC')
+    ));
+
+    // Show current user info
+    const card = el('div', { class: 'card' });
+    card.appendChild(el('div', { class: 'card-header' }, 'Current Session'));
+    card.appendChild(el('div', { class: 'card-body' },
+      el('div', { style: 'display:grid; grid-template-columns:100px 1fr; gap:6px 12px; font-size:0.82rem' },
+        el('span', { class: 'text-muted' }, 'Username'), el('span', { class: 'font-mono' }, me ? me.username : '—'),
+        el('span', { class: 'text-muted' }, 'Role'), el('span', null, el('span', { class: `badge ${me && me.role === 'admin' ? 'badge-bad' : 'badge-info'}` }, me ? me.role : '—')),
+        el('span', { class: 'text-muted' }, 'Tenant'), el('span', null, me ? String(me.tenant_id) : '—'),
+        el('span', { class: 'text-muted' }, 'MFA'), el('span', null, me && me.mfa_enabled ? 'Enabled ✓' : 'Disabled')
+      )
+    ));
+    root.appendChild(card);
+
+    // MFA enrollment
+    if (me && !me.mfa_enabled) {
+      root.appendChild(el('div', { style: 'margin-top:16px' },
+        el('button', { class: 'btn btn-secondary', onclick: enrollMFA }, 'Enable MFA (TOTP)')
+      ));
+    }
+  } catch (err) {
+    root.innerHTML = '';
+    root.appendChild(emptyState('Failed to load users', err.message));
+  }
+
+  async function enrollMFA() {
+    try {
+      const res = await api('POST', '/auth/mfa/enroll');
+      toast('Scan the QR code in your authenticator app. Secret: ' + (res.secret || ''), 'info');
+    } catch (err) { toast(err.message, 'bad'); }
+  }
+};
+
+// ===== SETTINGS =====
+views.settings = async (root) => {
+  root.innerHTML = '';
+  root.appendChild(el('div', { class: 'page-header' },
+    el('h2', null, 'Settings'),
+    el('p', { class: 'subtitle' }, 'System configuration')
+  ));
+
+  const layout = el('div', { class: 'vtab-layout card' });
+  const nav = el('div', { class: 'vtab-nav' });
+  const content = el('div', { class: 'vtab-content' });
+  layout.append(nav, content);
+  root.appendChild(layout);
+
+  const tabs = [
+    { id: 'general', label: 'General' },
+    { id: 'credentials', label: 'Credentials' },
+    { id: 'notifications', label: 'Notifications' },
+    { id: 'schedules', label: 'Scheduling' },
+    { id: 'api-tokens', label: 'API Tokens' },
+    { id: 'security', label: 'Security' },
+  ];
+
+  let active = 'general';
+
+  function renderNav() {
+    nav.innerHTML = '';
+    for (const t of tabs) {
+      nav.appendChild(el('button', {
+        class: `vtab-item ${t.id === active ? 'active' : ''}`,
+        onclick: () => { active = t.id; renderNav(); renderContent(); }
+      }, t.label));
+    }
+  }
+
+  function renderContent() {
+    content.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+    if (active === 'general') renderGeneral();
+    else if (active === 'credentials') renderCredentials();
+    else if (active === 'notifications') renderNotifications();
+    else if (active === 'schedules') renderSchedules();
+    else if (active === 'api-tokens') renderTokens();
+    else if (active === 'security') renderSecurity();
+  }
+
+  renderNav();
+  renderContent();
+
+  // --- General ---
+  function renderGeneral() {
+    content.innerHTML = '';
+    content.appendChild(el('div', { class: 'section-title' }, 'BACKUP SETTINGS'));
+    content.appendChild(el('div', { class: 'form-group' },
+      el('label', { class: 'form-label' }, 'Worker Concurrency'),
+      el('input', { class: 'form-input', type: 'number', value: '4', style: 'max-width:120px' }),
+      el('p', { class: 'form-hint' }, 'Number of simultaneous backup workers.')
+    ));
+    content.appendChild(el('div', { class: 'form-group' },
+      el('label', { class: 'form-label' }, 'Timeout (seconds)'),
+      el('input', { class: 'form-input', type: 'number', value: '60', style: 'max-width:120px' }),
+      el('p', { class: 'form-hint' }, 'Per-device backup timeout.')
+    ));
+    content.appendChild(el('div', { class: 'section-title' }, 'SYSTEM'));
+    content.appendChild(el('p', { class: 'text-xs text-muted' }, 'Server version and config are managed via config.yaml and environment variables. Restart required for changes.'));
+  }
+
+  // --- Credentials ---
+  async function renderCredentials() {
+    content.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+    try {
+      const creds = await api('GET', '/credentials');
+      content.innerHTML = '';
+      content.appendChild(el('div', { class: 'flex justify-between items-center', style: 'margin-bottom:12px' },
+        el('div', { class: 'section-title', style: 'margin:0; border:0; padding:0' }, 'CREDENTIAL VAULT'),
+        el('button', { class: 'btn btn-sm btn-primary', onclick: addCred }, '+ Add')
+      ));
+
+      if (!creds || creds.length === 0) {
+        content.appendChild(emptyState('No credentials', 'Add SSH/Telnet credentials for device access.'));
+        return;
+      }
+      const wrap = el('div', { class: 'data-table-wrap' });
+      const table = el('table', { class: 'data-table' });
+      table.innerHTML = '<thead><tr><th>Label</th><th>Username</th><th>Type</th><th>Actions</th></tr></thead>';
+      const tbody = el('tbody');
+      for (const c of creds) {
+        tbody.appendChild(el('tr', null,
+          el('td', { style: 'font-weight:500' }, escHTML(c.label || '—')),
+          el('td', { class: 'font-mono' }, escHTML(c.username)),
+          el('td', null, el('span', { class: 'badge badge-neutral' }, escHTML(c.auth_type || 'password'))),
+          el('td', null, el('button', { class: 'btn btn-xs btn-danger', onclick: () => delCred(c.id) }, 'Delete'))
+        ));
+      }
+      table.appendChild(tbody);
+      wrap.appendChild(table);
+      content.appendChild(wrap);
+    } catch (err) { content.innerHTML = `<p class="error">${escHTML(err.message)}</p>`; }
+  }
+
+  function addCred() {
+    const label = prompt('Label (e.g. "Core routers"):');
+    if (!label) return;
+    const username = prompt('Username:');
+    if (!username) return;
+    const password = prompt('Password:');
+    api('POST', '/credentials', { label, username, password }).then(() => {
+      toast('Credential created', 'ok');
+      renderCredentials();
+    }).catch(err => toast(err.message, 'bad'));
+  }
+
+  async function delCred(id) {
+    if (!confirm('Delete this credential?')) return;
+    try { await api('DELETE', `/credentials/${id}`); toast('Deleted', 'ok'); renderCredentials(); } catch (err) { toast(err.message, 'bad'); }
+  }
+
+  // --- Notifications ---
+  async function renderNotifications() {
+    content.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+    try {
+      const [channels, rules] = await Promise.all([
+        api('GET', '/notifications/channels').catch(() => []),
+        api('GET', '/notifications/rules').catch(() => [])
+      ]);
+      content.innerHTML = '';
+      content.appendChild(el('div', { class: 'flex justify-between items-center', style: 'margin-bottom:12px' },
+        el('div', { class: 'section-title', style: 'margin:0; border:0; padding:0' }, 'NOTIFICATION CHANNELS'),
+        el('button', { class: 'btn btn-sm btn-primary', onclick: addChannel }, '+ Add Channel')
+      ));
+
+      if (!channels || channels.length === 0) {
+        content.appendChild(emptyState('No channels', 'Add Webhook, Slack or email channels.'));
+      } else {
+        const wrap = el('div', { class: 'data-table-wrap' });
+        const table = el('table', { class: 'data-table' });
+        table.innerHTML = '<thead><tr><th>Name</th><th>Type</th><th>Actions</th></tr></thead>';
+        const tbody = el('tbody');
+        for (const ch of channels) {
+          tbody.appendChild(el('tr', null,
+            el('td', { style: 'font-weight:500' }, escHTML(ch.name || '—')),
+            el('td', null, el('span', { class: 'badge badge-neutral' }, escHTML(ch.type))),
+            el('td', null, el('button', { class: 'btn btn-xs btn-danger', onclick: () => delChannel(ch.id) }, 'Delete'))
+          ));
+        }
+        table.appendChild(tbody);
+        wrap.appendChild(table);
+        content.appendChild(wrap);
+      }
+
+      content.appendChild(el('div', { class: 'section-title', style: 'margin-top:24px' }, 'NOTIFICATION RULES'));
+      if (!rules || rules.length === 0) {
+        content.appendChild(el('p', { class: 'text-xs text-muted' }, 'No rules configured.'));
+      } else {
+        for (const r of rules) {
+          content.appendChild(el('div', { class: 'card', style: 'margin-bottom:8px; padding:10px 14px; font-size:0.8rem' },
+            el('span', { style: 'font-weight:500' }, escHTML(r.event_type || 'all')),
+            el('span', { class: 'text-muted' }, ` → Channel #${r.channel_id}`)
+          ));
+        }
+      }
+    } catch (err) { content.innerHTML = `<p class="error">${escHTML(err.message)}</p>`; }
+  }
+
+  function addChannel() {
+    const name = prompt('Channel name:');
+    if (!name) return;
+    const type = prompt('Type (webhook / slack / email):') || 'webhook';
+    const url = prompt('URL / endpoint:');
+    if (!url) return;
+    api('POST', '/notifications/channels', { name, type, url }).then(() => {
+      toast('Channel created', 'ok');
+      renderNotifications();
+    }).catch(err => toast(err.message, 'bad'));
+  }
+
+  async function delChannel(id) {
+    if (!confirm('Delete this channel?')) return;
+    try { await api('DELETE', `/notifications/channels/${id}`); toast('Deleted', 'ok'); renderNotifications(); } catch (err) { toast(err.message, 'bad'); }
+  }
+
+  // --- Schedules ---
+  async function renderSchedules() {
+    content.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+    try {
+      const schedules = await api('GET', '/schedules').catch(() => []);
+      content.innerHTML = '';
+      content.appendChild(el('div', { class: 'flex justify-between items-center', style: 'margin-bottom:12px' },
+        el('div', { class: 'section-title', style: 'margin:0; border:0; padding:0' }, 'BACKUP SCHEDULES'),
+        el('button', { class: 'btn btn-sm btn-primary', onclick: addSchedule }, '+ Add Schedule')
+      ));
+
+      if (!schedules || schedules.length === 0) {
+        content.appendChild(emptyState('No schedules', 'Create automated backup schedules.'));
+        return;
+      }
+      const wrap = el('div', { class: 'data-table-wrap' });
+      const table = el('table', { class: 'data-table' });
+      table.innerHTML = '<thead><tr><th>Name</th><th>Cron</th><th>Status</th><th>Actions</th></tr></thead>';
+      const tbody = el('tbody');
+      for (const s of schedules) {
+        tbody.appendChild(el('tr', null,
+          el('td', { style: 'font-weight:500' }, escHTML(s.name || '—')),
+          el('td', { class: 'font-mono text-sm' }, escHTML(s.cron || s.schedule || '—')),
+          el('td', null, el('span', { class: `badge ${s.enabled !== false ? 'badge-ok' : 'badge-neutral'}` }, s.enabled !== false ? 'Active' : 'Disabled')),
+          el('td', null, el('button', { class: 'btn btn-xs btn-danger', onclick: () => delSchedule(s.id) }, 'Delete'))
+        ));
+      }
+      table.appendChild(tbody);
+      wrap.appendChild(table);
+      content.appendChild(wrap);
+    } catch (err) { content.innerHTML = `<p class="error">${escHTML(err.message)}</p>`; }
+  }
+
+  function addSchedule() {
+    const name = prompt('Schedule name:');
+    if (!name) return;
+    const cron = prompt('Cron expression (e.g. "0 2 * * *" for daily at 2AM):');
+    if (!cron) return;
+    api('POST', '/schedules', { name, cron, enabled: true }).then(() => {
+      toast('Schedule created', 'ok');
+      renderSchedules();
+    }).catch(err => toast(err.message, 'bad'));
+  }
+
+  async function delSchedule(id) {
+    if (!confirm('Delete?')) return;
+    try { await api('DELETE', `/schedules/${id}`); toast('Deleted', 'ok'); renderSchedules(); } catch (err) { toast(err.message, 'bad'); }
+  }
+
+  // --- API Tokens ---
+  async function renderTokens() {
+    content.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+    try {
+      const tokens = await api('GET', '/api-tokens').catch(() => []);
+      content.innerHTML = '';
+      content.appendChild(el('div', { class: 'flex justify-between items-center', style: 'margin-bottom:12px' },
+        el('div', { class: 'section-title', style: 'margin:0; border:0; padding:0' }, 'API TOKENS'),
+        el('button', { class: 'btn btn-sm btn-primary', onclick: createToken }, '+ Generate Token')
+      ));
+
+      if (!tokens || tokens.length === 0) {
+        content.appendChild(emptyState('No API tokens', 'Generate tokens for machine-to-machine access.'));
+        return;
+      }
+      const wrap = el('div', { class: 'data-table-wrap' });
+      const table = el('table', { class: 'data-table' });
+      table.innerHTML = '<thead><tr><th>Name</th><th>Scope</th><th>Created</th><th>Actions</th></tr></thead>';
+      const tbody = el('tbody');
+      for (const t of tokens) {
+        tbody.appendChild(el('tr', null,
+          el('td', { style: 'font-weight:500' }, escHTML(t.name || t.label || '—')),
+          el('td', { class: 'font-mono text-sm' }, escHTML(t.scope || 'read')),
+          el('td', { class: 'text-muted text-sm' }, timeAgo(t.created_at)),
+          el('td', null, el('button', { class: 'btn btn-xs btn-danger', onclick: () => revokeToken(t.id) }, 'Revoke'))
+        ));
+      }
+      table.appendChild(tbody);
+      wrap.appendChild(table);
+      content.appendChild(wrap);
+    } catch (err) { content.innerHTML = `<p class="error">${escHTML(err.message)}</p>`; }
+  }
+
+  async function createToken() {
+    const name = prompt('Token name:');
+    if (!name) return;
+    try {
+      const res = await api('POST', '/api-tokens', { name, scope: 'read' });
+      if (res && res.token) {
+        toast('Token created. Copy it now — it won\'t be shown again.', 'info');
+        alert('Your token:\n\n' + res.token);
+      } else {
+        toast('Token created', 'ok');
+      }
+      renderTokens();
+    } catch (err) { toast(err.message, 'bad'); }
+  }
+
+  async function revokeToken(id) {
+    if (!confirm('Revoke this token?')) return;
+    try { await api('DELETE', `/api-tokens/${id}`); toast('Revoked', 'ok'); renderTokens(); } catch (err) { toast(err.message, 'bad'); }
+  }
+
+  // --- Security ---
+  function renderSecurity() {
+    content.innerHTML = '';
+    content.appendChild(el('div', { class: 'section-title' }, 'AUTHENTICATION'));
+    content.appendChild(el('div', { class: 'card', style: 'padding:14px' },
+      el('div', { class: 'flex justify-between items-center' },
+        el('div', null,
+          el('div', { style: 'font-weight:500; font-size:0.85rem' }, 'Multi-Factor Authentication (TOTP)'),
+          el('p', { class: 'form-hint', style: 'margin-top:4px' }, 'Enforce TOTP for all users via individual enrollment on the Users page.')
+        ),
+        el('span', { class: `badge ${me && me.mfa_enabled ? 'badge-ok' : 'badge-neutral'}` }, me && me.mfa_enabled ? 'Enabled' : 'Not enforced')
+      )
+    ));
+
+    content.appendChild(el('div', { class: 'section-title', style: 'margin-top:24px' }, 'SESSION'));
+    content.appendChild(el('p', { class: 'text-xs text-muted' }, 'Session TTL and cookie settings are configured via server config.yaml (security.session_ttl). Current session is valid.'));
+
+    content.appendChild(el('div', { class: 'section-title', style: 'margin-top:24px' }, 'ENCRYPTION'));
+    content.appendChild(el('p', { class: 'text-xs text-muted' }, 'Credentials are envelope-encrypted with AES-256-GCM. The master passphrase is derived from the server config and never stored in the database.'));
+  }
+};
