@@ -26,9 +26,10 @@ internal/api (server.go + handlers_phases.go)
     │
     ├─► internal/devices      Inventory CRUD (SQLite: devices, device_groups)
     │
-    ├─► internal/backup       Backup orchestration
-    │       │  Connects via internal/transport (SSH) using internal/credentials
-    │       │  Drives internal/drivers (CLI per-vendor) to fetch config text
+    ├─► internal/backup       Backup + apply orchestration
+    │       │  Connects via internal/transport (SSH, NETCONF, RESTCONF, gNMI)
+    │       │  using internal/credentials
+    │       │  Drives internal/drivers (CLI + model-driven) to fetch/apply config
     │       │  Persists artifact text in internal/configstore (per-device git repo)
     │       │  Writes backup_runs + config_versions rows to SQLite
     │       │
@@ -103,12 +104,11 @@ Rules:
 - **Ready in MVP scope**: inventory, backup orchestration, config versioning,
   diff/change events, compliance engine, push-job execution, tenant-aware core,
   signed release artifacts + SBOM generation.
-- **Scaffolded / partial**:
-  - NETCONF/RESTCONF/gNMI drivers are registered but not hardened end-to-end.
-  - Pollers support registration/heartbeat; full gRPC wire protocol is pending.
-  - Topology support is API-first (LLDP/CDP graph builder) without full UI.
-  - HA behavior exists (leader election) but requires deeper automated failover
-    and scale validation.
+- **Remaining follow-ups (non-blocking for 1.0.0)**:
+  - Topology support is API-first (LLDP/CDP graph builder) without a full graph
+    editor workflow.
+  - HA behavior exists (leader election) and has baseline failover tests; deeper
+    long-duration chaos/scale validation continues post-1.0.
 
 ## API and storage stability policy (pre-v1)
 

@@ -14,15 +14,12 @@ It is delivered as a single Go binary (modular monolith) with SQLite‑first
 persistence, container and Helm packaging, signed releases, and an SBOM with
 every tag.
 
-> **Status:** 1.0‑RC1. Phases 0–10 of the project plan are landed, including
-> native RESTCONF / gNMI transport integration, gRPC+mTLS distributed‑poller
-> listener, the full driver pack, and **automation `Apply()` live execution**
-> for SSH/CLI drivers. RESTCONF, gNMI, and NETCONF are wired for native
-> transport/capture flows in this release, but are not yet general-purpose
-> automation apply paths. Remaining hardening items (HA chaos/scale
-> validation) are tracked in
-> [`docs/roadmap.md`](docs/roadmap.md). The V1 API surface is now frozen —
-> see [SECURITY.md](SECURITY.md) for the current security posture.
+> **Status:** **1.0.0 Stable**. Phases 0–10 are now fully shipped, including
+> native NETCONF/RESTCONF/gNMI apply paths, expanded compliance rule-pack
+> coverage (ISP/Cisco/MikroTik/Junos/Nokia/Huawei), and full distributed-poller
+> gRPC wire registration over mTLS (Authenticate, Claim, Report, Stream/Health).
+> The V1 API surface is frozen — see [SECURITY.md](SECURITY.md) for the current
+> security posture.
 
 ---
 
@@ -74,13 +71,13 @@ items are usable today; *Follow‑up* items are tracked but not yet hardened.
 | 1 | MVP backup | Inventory CRUD, SSH transport, builtin CLI drivers, git‑backed config store, backup runs, embedded UI | Additional vendor coverage and transport hardening |
 | 2 | Change management & notifications | Diff engine, change events, webhook / Slack / email channels with rules | Policy tuning and richer routing/escalation |
 | 3 | Auditing & search | SQLite FTS5 full‑text search, saved searches, CSV export | Advanced indexing & large‑scale tuning |
-| 4 | Configuration compliance | Rules / rulesets / findings with transition notifications, **ISP/Cisco/MikroTik baseline rule packs** | Broader rule pack library and richer remediation workflows |
+| 4 | Configuration compliance | Rules / rulesets / findings with transition notifications, **ISP/Cisco/MikroTik/Junos/Nokia/Huawei baseline rule packs**, per-device-group rule-pack picker | Richer remediation workflows |
 | 5 | Discovery & NMS sync | TCP / banner scan, NetBox JSON import | SNMP enrichment, LibreNMS / Zabbix sync |
 | 6 | Push / pull automation | Push‑job CRUD, template rendering, preview, grouped results, **per-driver `Apply()` live execution via transport routing** | — |
-| 7 | In‑app CLI & distributed pollers | Web terminal transcript/audit, poller registration + heartbeat, poller job queue, gRPC wire-protocol contract, wire-level poller core adapter, dedicated gRPC+mTLS listener shell | Full poller RPC registration + remote execution hardening |
+| 7 | In‑app CLI & distributed pollers | Web terminal transcript/audit, poller registration + heartbeat, poller job queue, **fully registered gRPC+mTLS wire protocol and remote execution lifecycle (Authenticate → Claim → Report)** | — |
 | 8 | Runtime state auditing & compliance | Probe framework + runtime checks | Broader probe library and policy packs |
 | 9 | Multi‑tenancy & HA | Tenant CRUD, quotas, leader‑elected scheduler, Helm chart, **extended HA failover tests** (split-brain prevention, leader handoff timeliness, rapid leadership-change stability) | Automated scale testing and HA chaos framework |
-| 10 | Hardening + modern transports + topology + GitOps mirror | NETCONF helpers, LLDP/CDP topology API + UI canvas renderer, GitOps mirror, signed release + SBOM workflow, hardened NETCONF-over-SSH drivers, RESTCONF + gNMI native transport wiring, SSH known-hosts persistence, webhook/Slack URL sealing, topology API versioning | Full poller RPC registration/hardening |
+| 10 | Hardening + modern transports + topology + GitOps mirror | NETCONF helpers, LLDP/CDP topology API + UI canvas renderer, GitOps mirror, signed release + SBOM workflow, hardened NETCONF-over-SSH drivers, RESTCONF + gNMI native transport wiring, **NETCONF/RESTCONF/gNMI apply execution paths**, SSH known-hosts persistence, webhook/Slack URL sealing, topology API versioning | — |
 
 ## Architecture at a glance
 
@@ -108,9 +105,9 @@ items are usable today; *Follow‑up* items are tracked but not yet hardened.
   `internal/storage/migrations`. PostgreSQL is on the roadmap.
 - Configuration history is stored as plain text in per‑device git repositories
   rooted at `storage.config_repo_root`.
-- Distributed pollers can register/heartbeat and use the wire-level
-  authenticate/claim/report core adapter today; the dedicated gRPC+mTLS
-  listener shell is now available for remote poller connectivity.
+- Distributed pollers can register/heartbeat and execute the full wire lifecycle
+  over gRPC+mTLS: authenticate, claim jobs, report results, and stream/health
+  checks without local session state.
 
 For the deep dive read [`ARCHITECTURE.md`](ARCHITECTURE.md) (reviewer summary)
 and [`docs/architecture.md`](docs/architecture.md) (package‑level design).

@@ -346,6 +346,167 @@ func (s *server) handleApplyRulePack(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type groupRulePackAssignment struct {
+	GroupID   int64    `json:"group_id"`
+	GroupName string   `json:"group_name,omitempty"`
+	Packs     []string `json:"packs"`
+}
+
+type setGroupRulePackAssignmentInput struct {
+	Packs []string `json:"packs"`
+}
+
+func (s *server) handleListGroupRulePackAssignments(w http.ResponseWriter, r *http.Request) {
+	u := userFromContext(r.Context())
+	db, ok := s.DB.(*sql.DB)
+	if !ok || db == nil {
+		writeError(w, http.StatusInternalServerError, "compliance: database unavailable")
+		return
+	}
+	rows, err := db.QueryContext(r.Context(), `
+        SELECT g.id, g.name, a.pack_name
+        FROM device_groups g
+        LEFT JOIN compliance_rulepack_assignments a
+            ON a.tenant_id=g.tenant_id AND a.group_id=g.id
+        WHERE g.tenant_id=?
+        ORDER BY g.name ASC, a.pack_name ASC`,
+		u.TenantID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer rows.Close()
+	type bucket struct {
+		name  string
+		packs []string
+	}
+	byGroup := map[int64]*bucket{}
+	order := []int64{}
+	for rows.Next() {
+		var (
+			groupID int64
+			name    string
+			pack    sql.NullString
+		)
+		if err := rows.Scan(&groupID, &name, &pack); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		b, exists := byGroup[groupID]
+		if !exists {
+			b = &bucket{name: name}
+			byGroup[groupID] = b
+			order = append(order, groupID)
+		}
+		if pack.Valid && pack.String != "" {
+			b.packs = append(b.packs, pack.String)
+		}
+	}
+	out := make([]groupRulePackAssignment, 0, len(order))
+	for _, gid := range order {
+		b := byGroup[gid]
+		if b.packs == nil {
+			b.packs = []string{}
+		}
+		out = append(out, groupRulePackAssignment{
+			GroupID: gid, GroupName: b.name, Packs: b.packs,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *server) handleSetGroupRulePackAssignments(w http.ResponseWriter, r *http.Request) {
+	u := userFromContext(r.Context())
+	groupID, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	db, ok := s.DB.(*sql.DB)
+	if !ok || db == nil {
+		writeError(w, http.StatusInternalServerError, "compliance: database unavailable")
+		return
+	}
+	var in setGroupRulePackAssignmentInput
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Ensure the group exists in this tenant.
+	var exists int
+	if err := db.QueryRowContext(r.Context(),
+		`SELECT COUNT(1) FROM device_groups WHERE tenant_id=? AND id=?`,
+		u.TenantID, groupID).Scan(&exists); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if exists == 0 {
+		writeError(w, http.StatusNotFound, "device group not found")
+		return
+	}
+	// Validate all requested pack names.
+	for _, p := range in.Packs {
+		if _, found := rulepacks.Get(p); !found {
+			writeError(w, http.StatusBadRequest, "unknown rule pack: "+p)
+			return
+		}
+	}
+
+	tx, err := db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(r.Context(),
+		`DELETE FROM compliance_rulepack_assignments WHERE tenant_id=? AND group_id=?`,
+		u.TenantID, groupID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// Rebuild scoped rules for this group from selected packs.
+	if _, err := tx.ExecContext(r.Context(),
+		`DELETE FROM compliance_rules WHERE tenant_id=? AND group_id=?`,
+		u.TenantID, groupID); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	for _, packName := range in.Packs {
+		pack, _ := rulepacks.Get(packName)
+		if _, err := tx.ExecContext(r.Context(), `
+            INSERT INTO compliance_rulepack_assignments(tenant_id, group_id, pack_name, created_at)
+            VALUES(?, ?, ?, ?)`,
+			u.TenantID, groupID, packName, now); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		for _, tmpl := range pack.Rules {
+			if _, err := tx.ExecContext(r.Context(), `
+                INSERT INTO compliance_rules(tenant_id, group_id, name, kind, pattern, severity, description, created_at)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT DO UPDATE SET
+                    kind=excluded.kind,
+                    pattern=excluded.pattern,
+                    severity=excluded.severity,
+                    description=excluded.description`,
+				u.TenantID, groupID, tmpl.Name, tmpl.Kind, tmpl.Pattern, tmpl.Severity, tmpl.Description, now); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"group_id": groupID,
+		"packs":    in.Packs,
+		"applied":  len(in.Packs),
+	})
+}
+
 // ============================================================
 // Phase 5 — discovery
 // ============================================================

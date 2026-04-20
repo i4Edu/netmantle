@@ -151,6 +151,8 @@ func NewServer(d Deps) http.Handler {
 		// Rule packs: catalogue listing is read-only; applying a pack is operator+.
 		mux.Handle("GET /api/v1/compliance/rulepacks", s.auth(s.handleListRulePacks))
 		mux.Handle("POST /api/v1/compliance/rulepacks/{name}/apply", s.auth(s.requireWrite(s.handleApplyRulePack)))
+		mux.Handle("GET /api/v1/compliance/rulepack-assignments", s.auth(s.handleListGroupRulePackAssignments))
+		mux.Handle("PUT /api/v1/compliance/rulepack-assignments/{id}", s.auth(s.requireWrite(s.handleSetGroupRulePackAssignments)))
 	}
 
 	// Phase 5 — discovery.

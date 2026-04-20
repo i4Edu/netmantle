@@ -12,12 +12,19 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/i4Edu/netmantle/internal/poller"
+	pollerv1 "github.com/i4Edu/netmantle/internal/poller/pollerv1"
+	"github.com/i4Edu/netmantle/internal/storage"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestLoadMTLSConfigRequiresFiles(t *testing.T) {
@@ -182,6 +189,164 @@ func TestGRPCShutdownTimeoutForcesStop(t *testing.T) {
 	}
 }
 
+func TestPollerGRPCWireLifecycle(t *testing.T) {
+	dir := t.TempDir()
+	caCertPEM, caKey := mustNewCA(t)
+	serverCertPEM, serverKeyPEM := mustNewServerCert(t, caCertPEM, caKey)
+	clientCertPEM, clientKeyPEM := mustNewClientCert(t, caCertPEM, caKey)
+	caPath := filepath.Join(dir, "ca.pem")
+	serverCertPath := filepath.Join(dir, "server.pem")
+	serverKeyPath := filepath.Join(dir, "server.key")
+	clientCertPath := filepath.Join(dir, "client.pem")
+	clientKeyPath := filepath.Join(dir, "client.key")
+	for _, f := range []struct {
+		path string
+		data []byte
+	}{
+		{caPath, caCertPEM},
+		{serverCertPath, serverCertPEM},
+		{serverKeyPath, serverKeyPEM},
+		{clientCertPath, clientCertPEM},
+		{clientKeyPath, clientKeyPEM},
+	} {
+		if err := os.WriteFile(f.path, f.data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	db, err := storage.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := storage.Migrate(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := db.Exec(`INSERT INTO tenants(id, name, created_at) VALUES(1, 't', ?)`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO devices(id, tenant_id, hostname, address, port, driver, created_at) VALUES(10, 1, 'r1', '127.0.0.1', 22, 'generic_ssh', ?)`, now); err != nil {
+		t.Fatal(err)
+	}
+
+	pollers := poller.New(db)
+	jobs := poller.NewJobService(db)
+	wire := poller.NewWireService(pollers, jobs)
+	p, token, err := pollers.Register(context.Background(), 1, "z1", "poller-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enq, err := jobs.Enqueue(context.Background(), 1, 10, poller.JobTypeBackup, "{}", "grpc-lifecycle", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv, err := NewGRPCServer(GRPCConfig{
+		Address:         "127.0.0.1:0",
+		TLSCertFile:     serverCertPath,
+		TLSKeyFile:      serverKeyPath,
+		TLSClientCAFile: caPath,
+	}, wire, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.Start(ctx) }()
+	t.Cleanup(func() { srv.Shutdown(time.Second) })
+	time.Sleep(100 * time.Millisecond)
+
+	clientCert, err := tls.LoadX509KeyPair(clientCertPath, clientKeyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caCertPEM) {
+		t.Fatal("append ca cert")
+	}
+	_, port, _ := net.SplitHostPort(srv.lis.Addr().String())
+	target := net.JoinHostPort("localhost", port)
+	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{clientCert},
+		RootCAs:      pool,
+		MinVersion:   tls.VersionTLS13,
+		ServerName:   "localhost",
+	})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	client := pollerv1.NewPollerServiceClient(conn)
+
+	authCtx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+token)
+	authResp, err := client.Authenticate(authCtx, &pollerv1.AuthenticateRequest{
+		PollerName: p.Name,
+		TenantId:   1,
+		ClientTime: timestamppb.Now(),
+		Nonce:      "0123456789abcdef",
+	})
+	if err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	if authResp.GetPoller().GetId() != p.ID {
+		t.Fatalf("expected poller id %d, got %d", p.ID, authResp.GetPoller().GetId())
+	}
+
+	claimResp, err := client.ClaimJob(context.Background(), &pollerv1.ClaimJobRequest{
+		PollerId:          p.ID,
+		TenantId:          1,
+		SupportedJobTypes: []string{"backup"},
+	})
+	if err != nil {
+		t.Fatalf("ClaimJob: %v", err)
+	}
+	if claimResp.GetJob().GetId() != enq.ID {
+		t.Fatalf("expected claimed job %d, got %d", enq.ID, claimResp.GetJob().GetId())
+	}
+
+	reportResp, err := client.ReportResult(context.Background(), &pollerv1.ReportResultRequest{
+		JobId:      claimResp.GetJob().GetId(),
+		PollerId:   p.ID,
+		TenantId:   1,
+		Success:    true,
+		ResultJson: `{"applied":true}`,
+	})
+	if err != nil {
+		t.Fatalf("ReportResult: %v", err)
+	}
+	if !reportResp.GetAccepted() {
+		t.Fatal("expected accepted=true")
+	}
+
+	health, err := client.Health(context.Background(), &pollerv1.HealthRequest{PollerId: p.ID, TenantId: 1})
+	if err != nil {
+		t.Fatalf("Health: %v", err)
+	}
+	if !health.GetHealthy() {
+		t.Fatal("expected healthy=true")
+	}
+
+	stream, err := client.StreamJobs(context.Background(), &pollerv1.StreamJobsRequest{
+		PollerId: p.ID, TenantId: 1, SupportedJobTypes: []string{"backup"},
+	})
+	if err != nil {
+		t.Fatalf("StreamJobs: %v", err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("StreamJobs recv: %v", err)
+	}
+
+	var status string
+	if err := db.QueryRow(`SELECT status FROM poller_jobs WHERE id=?`, enq.ID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if strings.ToLower(status) != "done" {
+		t.Fatalf("expected job status done, got %q", status)
+	}
+}
+
 type sleepService struct {
 	delay time.Duration
 }
@@ -215,4 +380,35 @@ func registerSleepService(server *grpc.Server, delay time.Duration) {
 			},
 		}},
 	}, svc)
+}
+
+func mustNewClientCert(t *testing.T, caPEM []byte, caKey *rsa.PrivateKey) ([]byte, []byte) {
+	t.Helper()
+	block, _ := pem.Decode(caPEM)
+	if block == nil {
+		t.Fatal("failed to decode CA PEM")
+	}
+	caCert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tpl := &x509.Certificate{
+		SerialNumber: big.NewInt(3),
+		Subject:      pkix.Name{CommonName: "poller-client"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, caCert, &clientKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER := x509.MarshalPKCS1PrivateKey(clientKey)
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: keyDER})
 }

@@ -74,8 +74,8 @@ follow‑up work.
 | T13 | Supply‑chain compromise of release artifacts | Low / Critical | Release workflow signs binaries with cosign keyless (OIDC); SPDX SBOM published per tag | Reproducible builds verification; signed Helm chart |
 | T14 | Dependency vulnerability | Med / Med | Go modules pinned; CI fails on `go mod tidy` drift | Automated dependency vulnerability scan in CI |
 | T15 | Denial of service via expensive backups | Low / Med | `backup.workers` cap; per‑device timeout | API‑level rate limiting; circuit breakers per device |
-| T16 | NETCONF/RESTCONF/gNMI scaffolded paths used in production | Med / High | **NETCONF-over-SSH** now hardened for `cisco_netconf` and `junos_netconf` (uses SSH subsystem, not CLI shell); RESTCONF and gNMI stubs still return "scaffolded" error | Full RESTCONF/gNMI wiring (follow-up PR) |
-| T17 | Live push automation misuse | N/A today | Per‑driver `Apply()` is intentionally unimplemented; `internal/automation` returns "preview only" | Implement `Apply()` with explicit confirmation flow + dry‑run gate |
+| T16 | NETCONF/RESTCONF/gNMI paths misused or partially wired | Med / High | NETCONF-over-SSH, RESTCONF, and gNMI now include native write paths used by automation `Apply()` with tenant-scoped credential handling | Broader per-vendor model/path validation and stricter payload policy gates |
+| T17 | Live push automation misuse | Med / High | Change-request workflow, role gates, and audit trail remain in place while `Apply()` is now active across transport types | Add stronger policy controls (per-command approvals, staged dry-run enforcement) |
 
 ## 4. Authentication & authorisation
 

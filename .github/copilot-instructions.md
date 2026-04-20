@@ -123,11 +123,9 @@ exercised by tests) from **scaffolded** code (registered for inventory or to
 preserve API shape, but returning a clear "not implemented" / preview‑only
 error). This honesty is a feature.
 
-When working in scaffolded areas (currently: full NETCONF/RESTCONF/gNMI
-backup wiring, gRPC poller wire protocol, per‑driver `Apply()` execution in
-`internal/automation`, topology graph‑canvas renderer, additional vendor
-drivers beyond those listed as **hardened** in [`DRIVERS.md`](../DRIVERS.md),
-HA failover validation):
+When working in scaffolded areas (currently: topology graph‑canvas renderer,
+additional vendor drivers beyond those listed as **hardened** in
+[`DRIVERS.md`](../DRIVERS.md), HA failover validation):
 
 - **Do not** silently replace the stub with a fake/incomplete implementation
   that hides the limitation. The stub error message is intentional UX.

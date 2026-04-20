@@ -27,6 +27,11 @@ func (b *blockingGNMIGetter) Get(ctx context.Context, _ *gpb.GetRequest, _ ...gr
 	return nil, ctx.Err()
 }
 
+func (b *blockingGNMIGetter) Set(ctx context.Context, _ *gpb.SetRequest, _ ...grpc.CallOption) (*gpb.SetResponse, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
 // grpcStatusGNMIGetter returns a gRPC status error with the configured code.
 type grpcStatusGNMIGetter struct {
 	code codes.Code
@@ -37,12 +42,16 @@ func (g *grpcStatusGNMIGetter) Get(_ context.Context, _ *gpb.GetRequest, _ ...gr
 	return nil, status.Error(g.code, g.msg)
 }
 
+func (g *grpcStatusGNMIGetter) Set(_ context.Context, _ *gpb.SetRequest, _ ...grpc.CallOption) (*gpb.SetResponse, error) {
+	return nil, status.Error(g.code, g.msg)
+}
+
 func TestGNMIChaos(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		name     string
-		getter   gnmiGetter
+		getter   gnmiClient
 		setupCtx func() (context.Context, context.CancelFunc)
 		wantErr  bool
 		errCheck func(t *testing.T, err error)
@@ -113,7 +122,7 @@ func TestGNMIChaos(t *testing.T) {
 			ctx, cancel := tc.setupCtx()
 			defer cancel()
 
-			sess := &gnmiSession{getter: tc.getter, username: "testuser", password: "testpass"}
+			sess := &gnmiSession{client: tc.getter, username: "testuser", password: "testpass"}
 			got, err := sess.Run(ctx, "get-config:running")
 
 			if tc.wantErr {

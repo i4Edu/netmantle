@@ -2,6 +2,8 @@ package transport
 
 import (
 	"context"
+	"encoding/base64"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -94,6 +96,50 @@ func TestRESTCONFPathParsing(t *testing.T) {
 		if tc.ok && got != tc.want {
 			t.Fatalf("%q: want %q got %q", tc.cmd, tc.want, got)
 		}
+	}
+}
+
+func TestRESTCONFEditConfigWithBasicAuth(t *testing.T) {
+	payload := `{"system":{"config":{"hostname":"r1"}}}`
+	cmd := "edit-config:running:" + base64.StdEncoding.EncodeToString([]byte(payload))
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, ok := r.BasicAuth()
+		if !ok || user != "u" || pass != "p" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if r.Method != http.MethodPatch {
+			http.Error(w, "method "+r.Method, http.StatusMethodNotAllowed)
+			return
+		}
+		if got := r.URL.RequestURI(); got != "/restconf/data" {
+			http.Error(w, "bad path "+got, http.StatusBadRequest)
+			return
+		}
+		gotBody, _ := io.ReadAll(r.Body)
+		if string(gotBody) != payload {
+			http.Error(w, "bad payload", http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer srv.Close()
+
+	sess, _, err := DialRESTCONF(context.Background(), RESTCONFConfig{
+		Address:            srv.URL,
+		Username:           "u",
+		Password:           "p",
+		InsecureSkipVerify: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := sess.Run(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got != `{"status":"ok"}` {
+		t.Fatalf("unexpected response body: %q", got)
 	}
 }
 

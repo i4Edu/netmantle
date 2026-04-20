@@ -2,6 +2,7 @@ package backup
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"log/slog"
@@ -122,5 +123,59 @@ func TestSessionFactoryForModelDrivenDriversFailsFastWhenUnset(t *testing.T) {
 				t.Fatalf("unexpected fallback call: %v", err)
 			}
 		})
+	}
+}
+
+func TestApplyRenderedConfigUsesModelDrivenWriteCommand(t *testing.T) {
+	db, err := storage.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := storage.Migrate(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	res, _ := db.Exec(`INSERT INTO tenants(name, created_at) VALUES('t', '2026-01-01T00:00:00Z')`)
+	tid, _ := res.LastInsertId()
+
+	devRepo := devices.NewRepo(db)
+	sealer, _ := crypto.NewSealer("k")
+	credRepo := credentials.NewRepo(db, sealer)
+	store, _ := configstore.New(t.TempDir())
+	cred, _ := credRepo.Create(context.Background(),
+		credentials.Credential{TenantID: tid, Name: "c", Username: "u"}, "p")
+
+	d, _ := devRepo.CreateDevice(context.Background(), devices.Device{
+		TenantID: tid, Hostname: "r-rest", Address: "10.0.0.2", Port: 443,
+		Driver: "restconf", CredentialID: &cred.ID,
+	})
+	payload := `{"interfaces":{"interface":[{"name":"xe-0/0/0"}]}}`
+	wantCmd := "edit-config:running:" + base64.StdEncoding.EncodeToString([]byte(payload))
+	fakeSess := fakesession.New(map[string]string{
+		wantCmd: "<ok/>",
+	})
+
+	svc := New(devRepo, credRepo, store, db,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		5*time.Second, 2,
+		func(context.Context, devices.Device, string, string) (drivers.Session, func() error, error) {
+			return nil, nil, errors.New("unexpected default session factory")
+		},
+	)
+	svc.RestconfSession = func(_ context.Context, _ devices.Device, user, pw string) (drivers.Session, func() error, error) {
+		if user != "u" || pw != "p" {
+			t.Fatalf("unexpected credentials passed to restconf session: %q/%q", user, pw)
+		}
+		return fakeSess, func() error { return nil }, nil
+	}
+	got, err := svc.ApplyRenderedConfig(context.Background(), d, payload)
+	if err != nil {
+		t.Fatalf("ApplyRenderedConfig: %v", err)
+	}
+	if got != "<ok/>" {
+		t.Fatalf("unexpected output: %q", got)
+	}
+	if len(fakeSess.Calls) != 1 || fakeSess.Calls[0] != wantCmd {
+		t.Fatalf("unexpected command calls: %#v", fakeSess.Calls)
 	}
 }

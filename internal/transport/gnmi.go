@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -34,8 +35,17 @@ type gnmiGetter interface {
 	Get(ctx context.Context, in *gpb.GetRequest, opts ...grpc.CallOption) (*gpb.GetResponse, error)
 }
 
+type gnmiSetter interface {
+	Set(ctx context.Context, in *gpb.SetRequest, opts ...grpc.CallOption) (*gpb.SetResponse, error)
+}
+
+type gnmiClient interface {
+	gnmiGetter
+	gnmiSetter
+}
+
 type gnmiSession struct {
-	getter      gnmiGetter
+	client      gnmiClient
 	username    string
 	password    string
 	bearerToken string
@@ -71,7 +81,7 @@ func DialGNMI(ctx context.Context, cfg GNMIConfig) (drivers.Session, func() erro
 		return nil, nil, fmt.Errorf("transport/gnmi: dial: %w", err)
 	}
 	return &gnmiSession{
-		getter:      gpb.NewGNMIClient(conn),
+		client:      gpb.NewGNMIClient(conn),
 		username:    cfg.Username,
 		password:    cfg.Password,
 		bearerToken: cfg.BearerToken,
@@ -116,32 +126,61 @@ func normalizeHostPort(hostPort string, defaultPort int, label string) (string, 
 }
 
 func (s *gnmiSession) Run(ctx context.Context, cmd string) (string, error) {
-	req, err := buildGNMIGetRequest(cmd)
-	if err != nil {
-		return "", err
-	}
+	cmd = strings.TrimSpace(cmd)
 	ctx = withGNMIAuth(ctx, s.username, s.password, s.bearerToken)
-	resp, err := s.getter.Get(ctx, req)
-	if err != nil {
-		return "", fmt.Errorf("transport/gnmi: get: %w", err)
-	}
-	out := map[string]any{}
-	for _, notif := range resp.GetNotification() {
-		prefix := gnmiPathToString(notif.GetPrefix())
-		for _, upd := range notif.GetUpdate() {
-			key := joinGNMIPath(prefix, gnmiPathToString(upd.GetPath()))
-			out[key] = gnmiTypedValueToAny(upd.GetVal())
+	if strings.HasPrefix(cmd, "get-config") {
+		req, err := buildGNMIGetRequest(cmd)
+		if err != nil {
+			return "", err
 		}
-		for _, del := range notif.GetDelete() {
-			key := joinGNMIPath(prefix, gnmiPathToString(del))
-			out[key] = nil
+		resp, err := s.client.Get(ctx, req)
+		if err != nil {
+			return "", fmt.Errorf("transport/gnmi: get: %w", err)
 		}
+		out := map[string]any{}
+		for _, notif := range resp.GetNotification() {
+			prefix := gnmiPathToString(notif.GetPrefix())
+			for _, upd := range notif.GetUpdate() {
+				key := joinGNMIPath(prefix, gnmiPathToString(upd.GetPath()))
+				out[key] = gnmiTypedValueToAny(upd.GetVal())
+			}
+			for _, del := range notif.GetDelete() {
+				key := joinGNMIPath(prefix, gnmiPathToString(del))
+				out[key] = nil
+			}
+		}
+		body, err := json.Marshal(out)
+		if err != nil {
+			return "", fmt.Errorf("transport/gnmi: marshal response: %w", err)
+		}
+		return string(body), nil
 	}
-	body, err := json.Marshal(out)
-	if err != nil {
-		return "", fmt.Errorf("transport/gnmi: marshal response: %w", err)
+	if strings.HasPrefix(cmd, "edit-config:") || strings.HasPrefix(cmd, "set-config:") {
+		req, err := buildGNMISetRequest(cmd)
+		if err != nil {
+			return "", err
+		}
+		resp, err := s.client.Set(ctx, req)
+		if err != nil {
+			return "", fmt.Errorf("transport/gnmi: set: %w", err)
+		}
+		results := make([]map[string]any, 0, len(resp.GetResponse()))
+		for _, r := range resp.GetResponse() {
+			results = append(results, map[string]any{
+				"path":      gnmiPathToString(r.GetPath()),
+				"operation": r.GetOp().String(),
+			})
+		}
+		body, err := json.Marshal(map[string]any{
+			"timestamp": resp.GetTimestamp(),
+			"results":   results,
+		})
+		if err != nil {
+			return "", fmt.Errorf("transport/gnmi: marshal set response: %w", err)
+		}
+		return string(body), nil
 	}
-	return string(body), nil
+	return "", fmt.Errorf("transport/gnmi: unsupported command (use get-config or edit-config:<running|candidate|path>:<base64-json>)")
 }
 
 func withGNMIAuth(ctx context.Context, username, password, bearer string) context.Context {
@@ -176,7 +215,44 @@ func buildGNMIGetRequest(cmd string) (*gpb.GetRequest, error) {
 			Encoding: gpb.Encoding_JSON_IETF,
 		}, nil
 	}
-	return nil, fmt.Errorf("transport/gnmi: unsupported command %q (use get-config[:running|candidate|<path>])", c)
+	return nil, fmt.Errorf("transport/gnmi: unsupported command (use get-config[:running|candidate|<path>])")
+}
+
+func buildGNMISetRequest(cmd string) (*gpb.SetRequest, error) {
+	path, payload, err := parseGNMISetCommand(cmd)
+	if err != nil {
+		return nil, err
+	}
+	return &gpb.SetRequest{
+		Replace: []*gpb.Update{{
+			Path: path,
+			Val:  &gpb.TypedValue{Value: &gpb.TypedValue_JsonIetfVal{JsonIetfVal: payload}},
+		}},
+	}, nil
+}
+
+func parseGNMISetCommand(cmd string) (*gpb.Path, []byte, error) {
+	c := strings.TrimSpace(cmd)
+	c = strings.TrimPrefix(c, "edit-config:")
+	c = strings.TrimPrefix(c, "set-config:")
+	parts := strings.SplitN(c, ":", 2)
+	if len(parts) != 2 {
+		return nil, nil, fmt.Errorf("transport/gnmi: invalid edit-config command")
+	}
+	selector := strings.TrimSpace(parts[0])
+	payload, err := base64.StdEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, nil, fmt.Errorf("transport/gnmi: invalid base64 payload")
+	}
+	switch selector {
+	case "running", "candidate":
+		return &gpb.Path{}, payload, nil
+	default:
+		if selector == "" {
+			return nil, nil, fmt.Errorf("transport/gnmi: empty edit-config selector")
+		}
+		return parseGNMIPath(selector), payload, nil
+	}
 }
 
 func parseGNMIPath(p string) *gpb.Path {

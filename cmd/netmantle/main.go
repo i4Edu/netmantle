@@ -277,41 +277,7 @@ func runServe(argv []string) error {
 		return backend, nil
 	})
 	automationSvc := automation.New(db, devRepo, func(ctx context.Context, d devices.Device, config string) (string, error) {
-		if d.CredentialID == nil {
-			return "", fmt.Errorf("automation: device %q (id %d) has no credential", d.Hostname, d.ID)
-		}
-		// RESTCONF, gNMI, and NETCONF transports expose only read (get-config)
-		// paths today. Passing a rendered template to Run() would return
-		// "unsupported command" and risk echoing the full config payload in the
-		// error string. Return a clear error instead so operators get actionable
-		// feedback. A real edit-config / set path is a post-RC1 follow-up.
-		driverLower := strings.ToLower(d.Driver)
-		switch {
-		case strings.Contains(driverLower, "restconf"):
-			return "", fmt.Errorf("automation: live apply is not supported for RESTCONF devices (read-only transport); use an SSH/CLI driver for push jobs")
-		case strings.Contains(driverLower, "gnmi"):
-			return "", fmt.Errorf("automation: live apply is not supported for gNMI devices (read-only transport); use an SSH/CLI driver for push jobs")
-		case strings.Contains(driverLower, "netconf"):
-			return "", fmt.Errorf("automation: live apply is not supported for NETCONF devices (read-only transport); use an SSH/CLI driver for push jobs")
-		}
-		var output string
-		err := credRepo.Use(ctx, d.TenantID, *d.CredentialID, func(user, pw string) error {
-			sess, closer, serr := sessionFactory(ctx, d, user, pw)
-			if serr != nil {
-				return serr
-			}
-			defer func() {
-				if cerr := closer(); cerr != nil {
-					log.Debug("automation: session close", "err", cerr, "device", d.Hostname)
-				}
-			}()
-			out, rerr := sess.Run(ctx, config)
-			if rerr != nil {
-				return rerr
-			}
-			output = out
-			return nil
-		})
+		output, err := bSvc.ApplyRenderedConfig(ctx, d, config)
 		if err != nil {
 			return "", err
 		}

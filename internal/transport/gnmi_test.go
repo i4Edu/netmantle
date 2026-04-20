@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"encoding/base64"
 	"testing"
 
 	gpb "github.com/openconfig/gnmi/proto/gnmi"
@@ -19,6 +20,29 @@ func (f *fakeGNMIGetter) Get(_ context.Context, in *gpb.GetRequest, _ ...grpc.Ca
 	return f.resp, f.err
 }
 
+func (f *fakeGNMIGetter) Set(_ context.Context, _ *gpb.SetRequest, _ ...grpc.CallOption) (*gpb.SetResponse, error) {
+	return &gpb.SetResponse{}, nil
+}
+
+type fakeGNMIClient struct {
+	getResp *gpb.GetResponse
+	getErr  error
+	getReq  *gpb.GetRequest
+	setResp *gpb.SetResponse
+	setErr  error
+	setReq  *gpb.SetRequest
+}
+
+func (f *fakeGNMIClient) Get(_ context.Context, in *gpb.GetRequest, _ ...grpc.CallOption) (*gpb.GetResponse, error) {
+	f.getReq = in
+	return f.getResp, f.getErr
+}
+
+func (f *fakeGNMIClient) Set(_ context.Context, in *gpb.SetRequest, _ ...grpc.CallOption) (*gpb.SetResponse, error) {
+	f.setReq = in
+	return f.setResp, f.setErr
+}
+
 func TestGNMISessionRun(t *testing.T) {
 	getter := &fakeGNMIGetter{
 		resp: &gpb.GetResponse{
@@ -34,7 +58,7 @@ func TestGNMISessionRun(t *testing.T) {
 			},
 		},
 	}
-	s := &gnmiSession{getter: getter, username: "u", password: "p"}
+	s := &gnmiSession{client: getter, username: "u", password: "p"}
 	got, err := s.Run(context.Background(), "get-config:running")
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -44,6 +68,31 @@ func TestGNMISessionRun(t *testing.T) {
 	}
 	if getter.req.GetType() != gpb.GetRequest_CONFIG {
 		t.Fatalf("expected CONFIG type, got %v", getter.req.GetType())
+	}
+}
+
+func TestGNMISessionEditConfig(t *testing.T) {
+	fake := &fakeGNMIClient{
+		setResp: &gpb.SetResponse{
+			Timestamp: 12345,
+			Response: []*gpb.UpdateResult{{
+				Path: &gpb.Path{Elem: []*gpb.PathElem{{Name: "system"}, {Name: "config"}}},
+				Op:   gpb.UpdateResult_REPLACE,
+			}},
+		},
+	}
+	s := &gnmiSession{client: fake, username: "u", password: "p"}
+	payload := `{"hostname":"edge-r1"}`
+	cmd := "edit-config:/system/config:" + base64.StdEncoding.EncodeToString([]byte(payload))
+	got, err := s.Run(context.Background(), cmd)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got == "" {
+		t.Fatal("expected non-empty set response")
+	}
+	if fake.setReq == nil || len(fake.setReq.GetReplace()) != 1 {
+		t.Fatalf("expected a replace update request, got %#v", fake.setReq)
 	}
 }
 

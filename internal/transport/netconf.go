@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net"
@@ -219,6 +220,26 @@ func (s *NetconfSession) readUntilDelimiter(ctx context.Context, delim, timeoutM
 func (s *NetconfSession) Run(ctx context.Context, cmd string) (string, error) {
 	cmd = strings.TrimSpace(cmd)
 
+	if strings.HasPrefix(cmd, "edit-config:") {
+		datastore, payload, err := parseNetconfEditConfigCommand(cmd)
+		if err != nil {
+			return "", err
+		}
+		rpc := buildEditConfigRPC(s.msgID, datastore, payload)
+		s.msgID++
+		if _, err := io.WriteString(s.stdin, rpc); err != nil {
+			return "", fmt.Errorf("transport/netconf: send rpc: %w", err)
+		}
+		reply, err := s.readRPCReply(ctx)
+		if err != nil {
+			return "", err
+		}
+		if err := parseEditConfigReply(reply); err != nil {
+			return "", err
+		}
+		return "<ok/>", nil
+	}
+
 	// Determine datastore from command string.
 	var datastore string
 	switch {
@@ -229,7 +250,7 @@ func (s *NetconfSession) Run(ctx context.Context, cmd string) (string, error) {
 	case cmd == "get-config:startup":
 		datastore = "startup"
 	default:
-		return "", fmt.Errorf("transport/netconf: unsupported command %q (use get-config[:running|candidate|startup])", cmd)
+		return "", fmt.Errorf("transport/netconf: unsupported command (use get-config[:running|candidate|startup] or edit-config:<running|candidate|startup>:<base64-config>)")
 	}
 
 	rpc := buildGetConfigRPC(s.msgID, datastore)
@@ -239,8 +260,19 @@ func (s *NetconfSession) Run(ctx context.Context, cmd string) (string, error) {
 		return "", fmt.Errorf("transport/netconf: send rpc: %w", err)
 	}
 
-	// Read the full reply, bounded by ]]>]]>. The blocking Read runs in a
-	// goroutine so the timeout and context cancellation can interrupt it.
+	reply, err := s.readRPCReply(ctx)
+	if err != nil {
+		return "", err
+	}
+	data, err := netconfpkg.ParseRPCReply(reply)
+	if err != nil {
+		return "", fmt.Errorf("transport/netconf: parse reply: %w", err)
+	}
+	return strings.TrimSpace(data), nil
+}
+
+// readRPCReply reads one framed NETCONF RPC reply (]]>]]> terminated).
+func (s *NetconfSession) readRPCReply(ctx context.Context) (string, error) {
 	type chunk struct {
 		data []byte
 		err  error
@@ -285,12 +317,26 @@ loop:
 			}
 		}
 	}
+	return string(buf), nil
+}
 
-	data, err := netconfpkg.ParseRPCReply(string(buf))
-	if err != nil {
-		return "", fmt.Errorf("transport/netconf: parse reply: %w", err)
+func parseNetconfEditConfigCommand(cmd string) (datastore string, payload string, err error) {
+	rest := strings.TrimPrefix(strings.TrimSpace(cmd), "edit-config:")
+	parts := strings.SplitN(rest, ":", 2)
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("transport/netconf: invalid edit-config command")
 	}
-	return strings.TrimSpace(data), nil
+	ds := strings.TrimSpace(parts[0])
+	switch ds {
+	case "running", "candidate", "startup":
+	default:
+		return "", "", fmt.Errorf("transport/netconf: invalid edit-config datastore %q", ds)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", "", fmt.Errorf("transport/netconf: invalid base64 payload")
+	}
+	return ds, string(decoded), nil
 }
 
 // sendClose sends a NETCONF <close-session> RPC. Errors are ignored.
@@ -313,4 +359,26 @@ func buildGetConfigRPC(msgID int, datastore string) string {
   </get-config>
 </rpc>
 ]]>]]>`, msgID, datastore)
+}
+
+func buildEditConfigRPC(msgID int, datastore, payload string) string {
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<rpc message-id="%d" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+  <edit-config>
+    <target><%s/></target>
+    <config>%s</config>
+  </edit-config>
+</rpc>
+]]>]]>`, msgID, datastore, payload)
+}
+
+func parseEditConfigReply(reply string) error {
+	body := strings.SplitN(reply, "]]>]]>", 2)[0]
+	if strings.Contains(body, "<rpc-error") {
+		return fmt.Errorf("transport/netconf: edit-config failed: rpc-error")
+	}
+	if strings.Contains(body, "<ok/>") || strings.Contains(body, "<ok />") {
+		return nil
+	}
+	return fmt.Errorf("transport/netconf: edit-config reply missing <ok/>")
 }

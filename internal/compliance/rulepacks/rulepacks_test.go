@@ -44,6 +44,15 @@ func TestGetReturnsCorrectPack(t *testing.T) {
 	}
 }
 
+func TestNewVendorBaselinePacksExist(t *testing.T) {
+	want := []string{"junos-baseline", "nokia-sros-baseline", "huawei-vrp-baseline"}
+	for _, name := range want {
+		if _, ok := rulepacks.Get(name); !ok {
+			t.Fatalf("expected pack %q to exist", name)
+		}
+	}
+}
+
 func TestGetMissingPackReturnsFalse(t *testing.T) {
 	_, ok := rulepacks.Get("does-not-exist")
 	if ok {
