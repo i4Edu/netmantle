@@ -336,7 +336,21 @@ func parseNetconfEditConfigCommand(cmd string) (datastore string, payload string
 	if err != nil {
 		return "", "", fmt.Errorf("transport/netconf: invalid base64 payload")
 	}
+	if err := validateNetconfEditPayload(string(decoded)); err != nil {
+		return "", "", err
+	}
 	return ds, string(decoded), nil
+}
+
+func validateNetconfEditPayload(payload string) error {
+	if strings.Contains(payload, "]]>]]>") {
+		return fmt.Errorf("transport/netconf: payload contains forbidden NETCONF delimiter")
+	}
+	lower := strings.ToLower(payload)
+	if strings.Contains(lower, "</config>") || strings.Contains(lower, "<rpc") || strings.Contains(lower, "</rpc>") {
+		return fmt.Errorf("transport/netconf: payload contains forbidden rpc wrapper elements")
+	}
+	return nil
 }
 
 // sendClose sends a NETCONF <close-session> RPC. Errors are ignored.

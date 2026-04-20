@@ -443,13 +443,21 @@ func (s *server) handleSetGroupRulePackAssignments(w http.ResponseWriter, r *htt
 		writeError(w, http.StatusNotFound, "device group not found")
 		return
 	}
-	// Validate all requested pack names.
+	// Validate all requested pack names and normalize duplicates.
+	seenPacks := make(map[string]struct{}, len(in.Packs))
+	uniquePacks := make([]string, 0, len(in.Packs))
 	for _, p := range in.Packs {
 		if _, found := rulepacks.Get(p); !found {
 			writeError(w, http.StatusBadRequest, "unknown rule pack: "+p)
 			return
 		}
+		if _, seen := seenPacks[p]; seen {
+			continue
+		}
+		seenPacks[p] = struct{}{}
+		uniquePacks = append(uniquePacks, p)
 	}
+	in.Packs = uniquePacks
 
 	tx, err := db.BeginTx(r.Context(), nil)
 	if err != nil {

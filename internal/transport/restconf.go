@@ -108,7 +108,11 @@ func (s *restconfSession) Run(ctx context.Context, cmd string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	req, err := http.NewRequestWithContext(ctx, method, s.baseURL+path, strings.NewReader(body))
+	var reqBody io.Reader
+	if method != http.MethodGet {
+		reqBody = strings.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, s.baseURL+path, reqBody)
 	if err != nil {
 		return "", fmt.Errorf("transport/restconf: build request: %w", err)
 	}

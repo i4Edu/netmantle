@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"net"
 	"os"
@@ -256,7 +257,6 @@ func TestPollerGRPCWireLifecycle(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Start(ctx) }()
 	t.Cleanup(func() { srv.Shutdown(time.Second) })
-	time.Sleep(100 * time.Millisecond)
 
 	clientCert, err := tls.LoadX509KeyPair(clientCertPath, clientKeyPath)
 	if err != nil {
@@ -280,13 +280,7 @@ func TestPollerGRPCWireLifecycle(t *testing.T) {
 	defer conn.Close()
 	client := pollerv1.NewPollerServiceClient(conn)
 
-	authCtx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+token)
-	authResp, err := client.Authenticate(authCtx, &pollerv1.AuthenticateRequest{
-		PollerName: p.Name,
-		TenantId:   1,
-		ClientTime: timestamppb.Now(),
-		Nonce:      "0123456789abcdef",
-	})
+	authResp, authCtx, err := waitForPollerAuthenticate(client, token, p.Name)
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
 	}
@@ -294,7 +288,7 @@ func TestPollerGRPCWireLifecycle(t *testing.T) {
 		t.Fatalf("expected poller id %d, got %d", p.ID, authResp.GetPoller().GetId())
 	}
 
-	claimResp, err := client.ClaimJob(context.Background(), &pollerv1.ClaimJobRequest{
+	claimResp, err := client.ClaimJob(authCtx, &pollerv1.ClaimJobRequest{
 		PollerId:          p.ID,
 		TenantId:          1,
 		SupportedJobTypes: []string{"backup"},
@@ -306,7 +300,7 @@ func TestPollerGRPCWireLifecycle(t *testing.T) {
 		t.Fatalf("expected claimed job %d, got %d", enq.ID, claimResp.GetJob().GetId())
 	}
 
-	reportResp, err := client.ReportResult(context.Background(), &pollerv1.ReportResultRequest{
+	reportResp, err := client.ReportResult(authCtx, &pollerv1.ReportResultRequest{
 		JobId:      claimResp.GetJob().GetId(),
 		PollerId:   p.ID,
 		TenantId:   1,
@@ -320,7 +314,7 @@ func TestPollerGRPCWireLifecycle(t *testing.T) {
 		t.Fatal("expected accepted=true")
 	}
 
-	health, err := client.Health(context.Background(), &pollerv1.HealthRequest{PollerId: p.ID, TenantId: 1})
+	health, err := client.Health(authCtx, &pollerv1.HealthRequest{PollerId: p.ID, TenantId: 1})
 	if err != nil {
 		t.Fatalf("Health: %v", err)
 	}
@@ -328,7 +322,7 @@ func TestPollerGRPCWireLifecycle(t *testing.T) {
 		t.Fatal("expected healthy=true")
 	}
 
-	stream, err := client.StreamJobs(context.Background(), &pollerv1.StreamJobsRequest{
+	stream, err := client.StreamJobs(authCtx, &pollerv1.StreamJobsRequest{
 		PollerId: p.ID, TenantId: 1, SupportedJobTypes: []string{"backup"},
 	})
 	if err != nil {
@@ -344,6 +338,11 @@ func TestPollerGRPCWireLifecycle(t *testing.T) {
 	}
 	if strings.ToLower(status) != "done" {
 		t.Fatalf("expected job status done, got %q", status)
+	}
+
+	cancel()
+	if err := <-errCh; err != nil {
+		t.Fatalf("grpc server returned error: %v", err)
 	}
 }
 
@@ -380,6 +379,28 @@ func registerSleepService(server *grpc.Server, delay time.Duration) {
 			},
 		}},
 	}, svc)
+}
+
+func waitForPollerAuthenticate(client pollerv1.PollerServiceClient, token, pollerName string) (*pollerv1.AuthenticateResponse, context.Context, error) {
+	deadline := time.Now().Add(3 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		nowNano := time.Now().UnixNano()
+		nonce := fmt.Sprintf("%d%08x", nowNano, nowNano)
+		authCtx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer "+token)
+		resp, err := client.Authenticate(authCtx, &pollerv1.AuthenticateRequest{
+			PollerName: pollerName,
+			TenantId:   1,
+			ClientTime: timestamppb.Now(),
+			Nonce:      nonce,
+		})
+		if err == nil {
+			return resp, authCtx, nil
+		}
+		lastErr = err
+		time.Sleep(50 * time.Millisecond)
+	}
+	return nil, nil, lastErr
 }
 
 func mustNewClientCert(t *testing.T, caPEM []byte, caKey *rsa.PrivateKey) ([]byte, []byte) {
