@@ -22,7 +22,9 @@ import (
 	"net"
 	"net/http"
 	"net/smtp"
+	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -67,6 +69,15 @@ type EmailConfig struct {
 	From             string `json:"from"`
 	To               string `json:"to"`
 	StartTLS         bool   `json:"starttls"`
+}
+
+// PushoverConfig is the JSON inside a pushover channel row.
+// Pushover delivers push notifications to Android/iOS devices.
+type PushoverConfig struct {
+	// Token is the Pushover application/API token.
+	Token string `json:"token"`
+	// UserKey is the Pushover user or group key.
+	UserKey string `json:"user_key"`
 }
 
 // Service persists channels/rules and dispatches events.
@@ -137,6 +148,14 @@ func (s *Service) CreateChannel(ctx context.Context, tenantID int64, name, kind 
 			raw["password_envelope"] = env
 			delete(raw, "password")
 			cfg, _ = json.Marshal(raw)
+		}
+	case "pushover":
+		var pc PushoverConfig
+		if err := json.Unmarshal(cfg, &pc); err != nil {
+			return Channel{}, fmt.Errorf("notify: parse pushover config: %w", err)
+		}
+		if pc.Token == "" || pc.UserKey == "" {
+			return Channel{}, errors.New("notify: pushover config requires token and user_key")
 		}
 	default:
 		return Channel{}, fmt.Errorf("notify: unknown kind %q", kind)
@@ -282,6 +301,12 @@ func (s *Service) sendOne(ctx context.Context, kind string, cfg []byte, ev Event
 			return err
 		}
 		return s.sendEmail(e, ev)
+	case "pushover":
+		var pc PushoverConfig
+		if err := json.Unmarshal(cfg, &pc); err != nil {
+			return fmt.Errorf("notify: parse pushover config: %w", err)
+		}
+		return s.sendPushover(ctx, pc, ev)
 	default:
 		return fmt.Errorf("unknown kind %q", kind)
 	}
@@ -399,4 +424,31 @@ func runSMTP(c smtpClient, cfg EmailConfig, pw string, ev Event) error {
 		return err
 	}
 	return c.Quit()
+}
+
+// sendPushover delivers a push notification via the Pushover API.
+// See https://pushover.net/api for field documentation.
+func (s *Service) sendPushover(ctx context.Context, cfg PushoverConfig, ev Event) error {
+	const pushoverAPI = "https://api.pushover.net/1/messages.json"
+	params := url.Values{
+		"token":   {cfg.Token},
+		"user":    {cfg.UserKey},
+		"title":   {ev.Subject},
+		"message": {ev.Body},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, pushoverAPI,
+		strings.NewReader(params.Encode()))
+	if err != nil {
+		return fmt.Errorf("notify: pushover request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := s.HTTP.Do(req)
+	if err != nil {
+		return fmt.Errorf("notify: pushover send: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("notify: pushover returned status %d", resp.StatusCode)
+	}
+	return nil
 }

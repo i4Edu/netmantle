@@ -47,6 +47,11 @@ type Service struct {
 	// GNMISession, when non-nil, is used for "gnmi" drivers.
 	GNMISession SessionFactory
 
+	// MikrotikSession, when non-nil, is used for "mikrotik_routeros" devices.
+	// It should use SSH exec mode (no interactive shell / PTY) to avoid the
+	// ANSI terminal-capability queries that MikroTik sends before its prompt.
+	MikrotikSession SessionFactory
+
 	// Audit, when set, is used for all audit_log writes so the format
 	// stays consistent with the rest of the codebase (see internal/audit).
 	// When nil, audit writes are skipped (the run rows in backup_runs are
@@ -215,6 +220,35 @@ func (s *Service) BackupNow(ctx context.Context, tenantID, deviceID int64, actor
 	return run, nil
 }
 
+// BackupAll triggers a BackupNow for every device across every tenant.
+// It is intended to be called by the scheduler. Errors are logged and do
+// not stop the sweep; the returned error is always nil.
+func (s *Service) BackupAll(ctx context.Context) error {
+	rows, err := s.DB.QueryContext(ctx, `SELECT id, tenant_id FROM devices`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type entry struct{ id, tenantID int64 }
+	var allDevices []entry
+	for rows.Next() {
+		var e entry
+		if err := rows.Scan(&e.id, &e.tenantID); err != nil {
+			return err
+		}
+		allDevices = append(allDevices, e)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, e := range allDevices {
+		if _, err := s.BackupNow(ctx, e.tenantID, e.id, "scheduler"); err != nil {
+			s.Logger.Warn("scheduled backup failed", "device_id", e.id, "tenant_id", e.tenantID, "err", err)
+		}
+	}
+	return nil
+}
+
 // ListRuns returns recent runs for a device.
 func (s *Service) ListRuns(ctx context.Context, deviceID int64, limit int) ([]Run, error) {
 	if limit <= 0 || limit > 200 {
@@ -313,6 +347,11 @@ func nullIfEmpty(s string) any {
 
 func (s *Service) sessionFactoryForDriver(name string) SessionFactory {
 	switch name {
+	case "mikrotik_routeros":
+		if s.MikrotikSession != nil {
+			return s.MikrotikSession
+		}
+		return missingSessionFactory("mikrotik_exec", name)
 	case "cisco_netconf", "junos_netconf":
 		if s.NetconfSession != nil {
 			return s.NetconfSession

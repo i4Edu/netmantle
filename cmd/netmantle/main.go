@@ -162,6 +162,21 @@ func runServe(argv []string) error {
 		})
 	}
 
+	// MikroTik RouterOS uses SSH exec mode (no interactive shell / PTY).
+	// The device sends ANSI terminal-capability probes before its prompt,
+	// which break prompt-based session detection; exec mode sidesteps this.
+	mikrotikFactory := func(ctx context.Context, d devices.Device, user, pw string) (drivers.Session, func() error, error) {
+		return transport.DialSSHExec(ctx, transport.SSHConfig{
+			Address:    d.Address,
+			Port:       d.Port,
+			Username:   user,
+			Password:   pw,
+			Timeout:    cfg.Backup.Timeout,
+			KnownHosts: knownHosts,
+			TenantID:   d.TenantID,
+		})
+	}
+
 	// NETCONF factory used for cisco_netconf / junos_netconf devices.
 	// Routes through the dedicated SSH NETCONF subsystem (RFC 6242) rather
 	// than the interactive CLI shell used by CLI drivers.
@@ -230,6 +245,7 @@ func runServe(argv []string) error {
 	bSvc.NetconfSession = netconfFactory
 	bSvc.RestconfSession = restconfFactory
 	bSvc.GNMISession = gnmiFactory
+	bSvc.MikrotikSession = mikrotikFactory
 
 	// Phase 2..10 services.
 	chgSvc := changes.New(db, store, &diff.Engine{Rules: diff.DefaultRules()})
@@ -384,6 +400,15 @@ func runServe(argv []string) error {
 				},
 			},
 		},
+	}
+	if cfg.Backup.Schedule > 0 {
+		runner.Jobs = append(runner.Jobs, scheduler.Job{
+			Name:     "scheduled-backup",
+			Interval: cfg.Backup.Schedule,
+			Run: func(ctx context.Context) error {
+				return bSvc.BackupAll(ctx)
+			},
+		})
 	}
 	go runner.Start(ctx, log.Info)
 

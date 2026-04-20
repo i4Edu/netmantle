@@ -85,6 +85,7 @@ func NewServer(d Deps) http.Handler {
 
 	// Public.
 	mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
+	mux.HandleFunc("POST /api/v1/auth/mfa-verify", s.handleMFAVerify)
 	mux.HandleFunc("GET /api/openapi.yaml", s.handleOpenAPI)
 	mux.HandleFunc("GET /api/docs", s.handleDocs)
 	mux.HandleFunc("GET /healthz", s.handleHealth)
@@ -94,6 +95,9 @@ func NewServer(d Deps) http.Handler {
 	// Authenticated.
 	mux.Handle("POST /api/v1/auth/logout", s.auth(s.handleLogout))
 	mux.Handle("GET /api/v1/auth/me", s.auth(s.handleMe))
+	mux.Handle("POST /api/v1/auth/mfa/enroll", s.auth(s.handleMFAEnroll))
+	mux.Handle("POST /api/v1/auth/mfa/confirm", s.auth(s.handleMFAConfirm))
+	mux.Handle("DELETE /api/v1/auth/mfa", s.auth(s.handleMFADisable))
 
 	mux.Handle("GET /api/v1/drivers", s.auth(s.handleListDrivers))
 
@@ -425,6 +429,20 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
+	// Check if MFA is enabled for this user.
+	mfaOn, _ := s.Auth.MFAEnabled(r.Context(), u.ID)
+	if mfaOn {
+		challengeID, err := s.Auth.CreateMFAChallenge(r.Context(), u.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "mfa error")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"mfa_required":  true,
+			"mfa_challenge": challengeID,
+		})
+		return
+	}
 	cookie, exp, err := s.Auth.CreateSession(r.Context(), u.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "session error")
@@ -440,6 +458,76 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Secure:   r.TLS != nil,
 	})
 	writeJSON(w, http.StatusOK, u)
+}
+
+// handleMFAVerify completes a two-step login for MFA-enabled accounts.
+func (s *server) handleMFAVerify(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Challenge string `json:"mfa_challenge"`
+		Code      string `json:"code"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	u, err := s.Auth.RedeemMFAChallenge(r.Context(), req.Challenge, req.Code)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "invalid mfa code")
+		return
+	}
+	cookie, exp, err := s.Auth.CreateSession(r.Context(), u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "session error")
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     s.Auth.CookieName(),
+		Value:    cookie,
+		Path:     "/",
+		Expires:  exp,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   r.TLS != nil,
+	})
+	writeJSON(w, http.StatusOK, u)
+}
+
+// handleMFAEnroll starts MFA enrollment for the authenticated user.
+func (s *server) handleMFAEnroll(w http.ResponseWriter, r *http.Request) {
+	u := userFromContext(r.Context())
+	enrollment, err := s.Auth.EnrollMFA(r.Context(), u.ID, "NetMantle", u.Username)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "mfa enroll error")
+		return
+	}
+	writeJSON(w, http.StatusOK, enrollment)
+}
+
+// handleMFAConfirm verifies the first TOTP code to confirm enrollment.
+func (s *server) handleMFAConfirm(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	u := userFromContext(r.Context())
+	if err := s.Auth.ConfirmMFA(r.Context(), u.ID, req.Code); err != nil {
+		writeError(w, http.StatusUnauthorized, "invalid mfa code")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleMFADisable removes TOTP MFA for the authenticated user.
+func (s *server) handleMFADisable(w http.ResponseWriter, r *http.Request) {
+	u := userFromContext(r.Context())
+	if err := s.Auth.DisableMFA(r.Context(), u.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "mfa disable error")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {

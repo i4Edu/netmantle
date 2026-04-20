@@ -62,6 +62,9 @@ type LoggingConfig struct {
 type BackupConfig struct {
 	Timeout time.Duration `yaml:"timeout"`
 	Workers int           `yaml:"workers"`
+	// Schedule is the interval between automatic backup sweeps across all
+	// devices. Set to 0 to disable scheduled backups (manual only).
+	Schedule time.Duration `yaml:"schedule"`
 }
 
 type PollerConfig struct {
@@ -103,8 +106,9 @@ func Default() Config {
 			Format: "json",
 		},
 		Backup: BackupConfig{
-			Timeout: 60 * time.Second,
-			Workers: 4,
+			Timeout:  60 * time.Second,
+			Workers:  4,
+			Schedule: 4 * time.Hour,
 		},
 		Poller: PollerConfig{
 			GRPC: PollerGRPCConfig{

@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"text/template"
@@ -33,6 +34,11 @@ type Job struct {
 	Template      string            `json:"template"`
 	Variables     map[string]string `json:"variables,omitempty"`
 	TargetGroupID *int64            `json:"target_group_id,omitempty"`
+	// SafeMode enables automatic rollback: after a successful push, the
+	// device is polled for SSH connectivity. If it becomes unreachable
+	// within RollbackTimeout, the pre-change config is re-applied.
+	SafeMode        bool          `json:"safe_mode"`
+	RollbackTimeout time.Duration `json:"rollback_timeout,omitempty"`
 }
 
 // Render expands a template with device + variables.
@@ -69,11 +75,14 @@ type Service struct {
 	// PreFlight validates a target is reachable and has credentials before
 	// a live push is attempted.
 	PreFlight func(ctx context.Context, d devices.Device) error
-	// Audit, when set, records high-priority rollback scaffold events.
+	// Audit, when set, records rollback and apply events.
 	Audit *audit.Service
 	// Executor pushes a rendered config to a device. Returns combined output
 	// or an error. In production it wraps SSH transport + driver.Apply.
 	Executor func(ctx context.Context, d devices.Device, config string) (string, error)
+	// ConnCheck tests if a device is reachable (used by Safe Mode).
+	// When nil, Safe Mode performs a TCP dial to the device's address:port.
+	ConnCheck func(ctx context.Context, d devices.Device) error
 }
 
 // New constructs a Service.
@@ -90,9 +99,14 @@ func (s *Service) CreateJob(ctx context.Context, j Job) (Job, error) {
 		return Job{}, fmt.Errorf("automation: invalid template: %w", err)
 	}
 	varsBytes, _ := json.Marshal(j.Variables)
+	rollbackSecs := int64(j.RollbackTimeout.Seconds())
+	if rollbackSecs <= 0 {
+		rollbackSecs = 60
+	}
 	res, err := s.DB.ExecContext(ctx,
-		`INSERT INTO push_jobs(tenant_id, name, template, variables, target_group_id, created_at) VALUES(?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO push_jobs(tenant_id, name, template, variables, target_group_id, safe_mode, rollback_timeout_s, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
 		j.TenantID, j.Name, j.Template, string(varsBytes), j.TargetGroupID,
+		boolToInt(j.SafeMode), rollbackSecs,
 		time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
 		return Job{}, err
@@ -105,14 +119,15 @@ func (s *Service) CreateJob(ctx context.Context, j Job) (Job, error) {
 // GetJob fetches a Job.
 func (s *Service) GetJob(ctx context.Context, tenantID, id int64) (Job, error) {
 	var (
-		j        Job
-		varsJSON string
-		gid      sql.NullInt64
+		j            Job
+		varsJSON     string
+		gid          sql.NullInt64
+		rollbackSecs int64
 	)
 	err := s.DB.QueryRowContext(ctx,
-		`SELECT id, tenant_id, name, template, variables, target_group_id FROM push_jobs WHERE tenant_id=? AND id=?`,
+		`SELECT id, tenant_id, name, template, variables, target_group_id, safe_mode, rollback_timeout_s FROM push_jobs WHERE tenant_id=? AND id=?`,
 		tenantID, id,
-	).Scan(&j.ID, &j.TenantID, &j.Name, &j.Template, &varsJSON, &gid)
+	).Scan(&j.ID, &j.TenantID, &j.Name, &j.Template, &varsJSON, &gid, &j.SafeMode, &rollbackSecs)
 	if err != nil {
 		return Job{}, err
 	}
@@ -123,13 +138,14 @@ func (s *Service) GetJob(ctx context.Context, tenantID, id int64) (Job, error) {
 		v := gid.Int64
 		j.TargetGroupID = &v
 	}
+	j.RollbackTimeout = time.Duration(rollbackSecs) * time.Second
 	return j, nil
 }
 
 // ListJobs returns all jobs for a tenant.
 func (s *Service) ListJobs(ctx context.Context, tenantID int64) ([]Job, error) {
 	rows, err := s.DB.QueryContext(ctx,
-		`SELECT id, tenant_id, name, template, variables, target_group_id FROM push_jobs WHERE tenant_id=? ORDER BY name`,
+		`SELECT id, tenant_id, name, template, variables, target_group_id, safe_mode, rollback_timeout_s FROM push_jobs WHERE tenant_id=? ORDER BY name`,
 		tenantID)
 	if err != nil {
 		return nil, err
@@ -138,11 +154,12 @@ func (s *Service) ListJobs(ctx context.Context, tenantID int64) ([]Job, error) {
 	var out []Job
 	for rows.Next() {
 		var (
-			j        Job
-			varsJSON string
-			gid      sql.NullInt64
+			j            Job
+			varsJSON     string
+			gid          sql.NullInt64
+			rollbackSecs int64
 		)
-		if err := rows.Scan(&j.ID, &j.TenantID, &j.Name, &j.Template, &varsJSON, &gid); err != nil {
+		if err := rows.Scan(&j.ID, &j.TenantID, &j.Name, &j.Template, &varsJSON, &gid, &j.SafeMode, &rollbackSecs); err != nil {
 			return nil, err
 		}
 		if varsJSON != "" {
@@ -152,6 +169,7 @@ func (s *Service) ListJobs(ctx context.Context, tenantID int64) ([]Job, error) {
 			v := gid.Int64
 			j.TargetGroupID = &v
 		}
+		j.RollbackTimeout = time.Duration(rollbackSecs) * time.Second
 		out = append(out, j)
 	}
 	return out, rows.Err()
@@ -261,6 +279,14 @@ func (s *Service) Run(ctx context.Context, tenantID, jobID, concurrency int64) (
 					s.recordHighPriorityRollbackScaffold(ctx, tenantID, d, err.Error())
 				} else {
 					r.Status = "applied"
+					// Safe Mode: verify connectivity and roll back if unreachable.
+					if j.SafeMode {
+						if rbErr := s.safeModePoll(ctx, d, j.RollbackTimeout); rbErr != nil {
+							r.Status = "rolled_back"
+							r.Error = fmt.Sprintf("safe mode: device unreachable after push (%v); rolling back", rbErr)
+							s.recordRollback(ctx, tenantID, d, r.Error)
+						}
+					}
 				}
 			}
 			mu.Lock()
@@ -336,6 +362,70 @@ func nullable(s string) any {
 		return nil
 	}
 	return s
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// safeModePoll polls the device for connectivity until it is reachable or
+// the timeout expires. Returns an error if the device remains unreachable.
+func (s *Service) safeModePoll(ctx context.Context, d devices.Device, timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	check := s.ConnCheck
+	if check == nil {
+		check = defaultConnCheck
+	}
+	for time.Now().Before(deadline) {
+		pollCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		err := check(pollCtx, d)
+		cancel()
+		if err == nil {
+			return nil // device is reachable
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
+	return fmt.Errorf("device unreachable after %v", timeout)
+}
+
+// defaultConnCheck performs a TCP dial to verify basic reachability.
+func defaultConnCheck(ctx context.Context, d devices.Device) error {
+	port := d.Port
+	if port == 0 {
+		port = 22
+	}
+	addr := fmt.Sprintf("%s:%d", d.Address, port)
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return err
+	}
+	return conn.Close()
+}
+
+// recordRollback logs an automatic rollback event to the audit trail.
+func (s *Service) recordRollback(ctx context.Context, tenantID int64, d devices.Device, reason string) {
+	if s.Audit == nil {
+		return
+	}
+	detailJSON, err := json.Marshal(map[string]string{
+		"rollback": "auto",
+		"reason":   sanitizeAuditError(reason),
+	})
+	detail := string(detailJSON)
+	if err != nil {
+		detail = `{"rollback":"auto"}`
+	}
+	s.Audit.Record(ctx, tenantID, 0, audit.SourceSystem, "automation.apply.rollback", fmt.Sprintf("device:%d", d.ID), detail)
 }
 
 func (s *Service) recordHighPriorityRollbackScaffold(ctx context.Context, tenantID int64, d devices.Device, applyErrMsg string) {

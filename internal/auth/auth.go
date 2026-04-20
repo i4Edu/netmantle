@@ -256,4 +256,135 @@ func randomPassword() string {
 var (
 	ErrInvalidCredentials = errors.New("auth: invalid credentials")
 	ErrInvalidSession     = errors.New("auth: invalid session")
+	ErrMFARequired        = errors.New("auth: MFA code required")
+	ErrInvalidMFACode     = errors.New("auth: invalid MFA code")
 )
+
+// MFAEnrollment holds the data returned when starting MFA setup.
+type MFAEnrollment struct {
+	Secret     string `json:"secret"`      // base32-encoded secret for manual entry
+	OtpauthURL string `json:"otpauth_url"` // QR-code URI for authenticator apps
+}
+
+// EnrollMFA generates a new TOTP secret for userID and stores it in the DB
+// (not yet active—call ConfirmMFA to activate after the user verifies).
+// Calling EnrollMFA again overwrites any pending unconfirmed secret.
+func (s *Service) EnrollMFA(ctx context.Context, userID int64, issuer, username string) (MFAEnrollment, error) {
+	secret, err := GenerateTOTPSecret()
+	if err != nil {
+		return MFAEnrollment{}, err
+	}
+	_, err = s.db.ExecContext(ctx,
+		`UPDATE users SET totp_secret = ? WHERE id = ?`, secret, userID)
+	if err != nil {
+		return MFAEnrollment{}, fmt.Errorf("auth: enroll mfa: %w", err)
+	}
+	return MFAEnrollment{
+		Secret:     secret,
+		OtpauthURL: TOTPOtpauthURL(issuer, username, secret),
+	}, nil
+}
+
+// ConfirmMFA verifies that the user can produce a valid TOTP code for their
+// enrolled secret. This must be called after EnrollMFA before the secret is
+// considered active. Returns ErrInvalidMFACode on a wrong code.
+//
+// NOTE: after ConfirmMFA the secret is retained—it is also the "active" flag.
+// DisableMFA removes it.
+func (s *Service) ConfirmMFA(ctx context.Context, userID int64, code string) error {
+	var secret sql.NullString
+	err := s.db.QueryRowContext(ctx,
+		`SELECT totp_secret FROM users WHERE id = ?`, userID).Scan(&secret)
+	if err != nil {
+		return fmt.Errorf("auth: confirm mfa: %w", err)
+	}
+	if !secret.Valid || secret.String == "" {
+		return errors.New("auth: no pending MFA enrollment")
+	}
+	if !VerifyTOTP(secret.String, code) {
+		return ErrInvalidMFACode
+	}
+	return nil
+}
+
+// DisableMFA removes the TOTP secret for userID, turning off MFA.
+func (s *Service) DisableMFA(ctx context.Context, userID int64) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE users SET totp_secret = NULL WHERE id = ?`, userID)
+	return err
+}
+
+// MFAEnabled reports whether the user with the given ID has MFA configured.
+func (s *Service) MFAEnabled(ctx context.Context, userID int64) (bool, error) {
+	var secret sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT totp_secret FROM users WHERE id = ?`, userID).Scan(&secret)
+	if err != nil {
+		return false, err
+	}
+	return secret.Valid && secret.String != "", nil
+}
+
+// AuthenticateMFA checks a TOTP code for the given user ID.
+// Returns ErrInvalidMFACode if the code is wrong.
+func (s *Service) AuthenticateMFA(ctx context.Context, userID int64, code string) error {
+	var secret sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT totp_secret FROM users WHERE id = ?`, userID).Scan(&secret)
+	if err != nil || !secret.Valid || secret.String == "" {
+		return ErrInvalidMFACode
+	}
+	if !VerifyTOTP(secret.String, code) {
+		return ErrInvalidMFACode
+	}
+	return nil
+}
+
+// CreateMFAChallenge stores a short-lived challenge token for a user who
+// passed password auth but has MFA enabled. Returns the challenge ID.
+func (s *Service) CreateMFAChallenge(ctx context.Context, userID int64) (string, error) {
+	id, err := randomID(32)
+	if err != nil {
+		return "", err
+	}
+	now := time.Now().UTC()
+	exp := now.Add(5 * time.Minute)
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO mfa_challenges(id, user_id, created_at, expires_at) VALUES(?, ?, ?, ?)`,
+		id, userID, now.Format(time.RFC3339), exp.Format(time.RFC3339))
+	if err != nil {
+		return "", fmt.Errorf("auth: create mfa challenge: %w", err)
+	}
+	return id, nil
+}
+
+// RedeemMFAChallenge verifies a TOTP code against a challenge token and,
+// on success, returns the associated User (challenge is consumed on success).
+func (s *Service) RedeemMFAChallenge(ctx context.Context, challengeID, code string) (*User, error) {
+	var (
+		u       User
+		role    string
+		expires string
+	)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT c.expires_at, u.id, u.tenant_id, u.username, u.role, u.totp_secret
+		FROM mfa_challenges c JOIN users u ON c.user_id = u.id
+		WHERE c.id = ?`, challengeID,
+	).Scan(&expires, &u.ID, &u.TenantID, &u.Username, &role, new(sql.NullString))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrInvalidMFACode
+		}
+		return nil, err
+	}
+	t, _ := time.Parse(time.RFC3339, expires)
+	if time.Now().After(t) {
+		_, _ = s.db.ExecContext(ctx, `DELETE FROM mfa_challenges WHERE id = ?`, challengeID)
+		return nil, ErrInvalidMFACode
+	}
+	// Verify TOTP.
+	if err := s.AuthenticateMFA(ctx, u.ID, code); err != nil {
+		return nil, err
+	}
+	// Consume challenge.
+	_, _ = s.db.ExecContext(ctx, `DELETE FROM mfa_challenges WHERE id = ?`, challengeID)
+	u.Role = Role(role)
+	return &u, nil
+}

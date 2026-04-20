@@ -19,6 +19,10 @@ func TestPromptRegex(t *testing.T) {
 		"r1$":             true,
 		"not a prompt":    false,
 		"":                false,
+		// MikroTik RouterOS prompt variants
+		"[admin@MikroTik] > ":    true,
+		"[admin@MikroTik] /ip> ": true,
+		"[admin@MikroTik] >":     true,
 	}
 	for s, want := range cases {
 		got := promptRE.MatchString(s)

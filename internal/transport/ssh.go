@@ -126,6 +126,85 @@ func DialSSH(ctx context.Context, cfg SSHConfig) (drivers.Session, func() error,
 	return s, closer, nil
 }
 
+// DialSSHExec returns a drivers.Session that runs each command via SSH exec
+// (non-interactive, no PTY, no shell). This avoids interactive-prompt
+// detection entirely and is the correct approach for devices like MikroTik
+// RouterOS that send ANSI terminal-capability queries before the prompt.
+//
+// Each call to Session.Run opens a fresh SSH channel, executes the command,
+// and returns its combined stdout. The returned closer tears down the
+// underlying SSH client.
+func DialSSHExec(ctx context.Context, cfg SSHConfig) (drivers.Session, func() error, error) {
+	if cfg.Username == "" {
+		return nil, nil, errors.New("transport/ssh: empty username")
+	}
+	if cfg.Timeout == 0 {
+		cfg.Timeout = 30 * time.Second
+	}
+
+	addr := cfg.Address
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		port := cfg.Port
+		if port == 0 {
+			port = 22
+		}
+		addr = net.JoinHostPort(addr, strconv.Itoa(port))
+	}
+
+	hk := resolveHostKeyCallback(ctx, cfg)
+	clientCfg := &ssh.ClientConfig{
+		User:            cfg.Username,
+		Auth:            []ssh.AuthMethod{ssh.Password(cfg.Password)},
+		HostKeyCallback: hk,
+		Timeout:         cfg.Timeout,
+	}
+
+	d := net.Dialer{Timeout: cfg.Timeout}
+	netConn, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("transport/ssh: dial: %w", err)
+	}
+	conn, chans, reqs, err := ssh.NewClientConn(netConn, addr, clientCfg)
+	if err != nil {
+		_ = netConn.Close()
+		return nil, nil, fmt.Errorf("transport/ssh: handshake: %w", err)
+	}
+	client := ssh.NewClient(conn, chans, reqs)
+	s := &sshExecSession{client: client, timeout: cfg.Timeout}
+	return s, client.Close, nil
+}
+
+// sshExecSession implements drivers.Session by opening a fresh SSH exec
+// channel for every Run call. No interactive shell or PTY is involved.
+type sshExecSession struct {
+	client  *ssh.Client
+	timeout time.Duration
+}
+
+func (s *sshExecSession) Run(ctx context.Context, cmd string) (string, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.timeout)
+		defer cancel()
+	}
+
+	sess, err := s.client.NewSession()
+	if err != nil {
+		return "", fmt.Errorf("transport/ssh: exec session: %w", err)
+	}
+	defer sess.Close()
+
+	out, err := sess.Output(cmd)
+	if err != nil {
+		// ExitError just means the command returned non-zero; still return output.
+		if _, ok := err.(*ssh.ExitError); ok {
+			return string(out), nil
+		}
+		return "", fmt.Errorf("transport/ssh: exec %q: %w", cmd, err)
+	}
+	return string(out), nil
+}
+
 // shellChannel is an io.ReadWriteCloser bridging an SSH shell's stdin and
 // stdout. It is used by the in-app web terminal (Phase 7).
 type shellChannel struct {
@@ -218,9 +297,13 @@ type sshSession struct {
 	mu      sync.Mutex
 }
 
-// promptRE matches typical CLI prompts at end-of-output. We accept
-// hostname#, hostname>, hostname$ and hostname(config)# variants.
-var promptRE = regexp.MustCompile(`(?m)^\S+(\([^)]+\))?[#>$]\s*$`)
+// promptRE matches typical CLI prompts at end-of-output. It handles:
+//   - Standard:  hostname#  hostname>  hostname$  hostname(config)#
+//   - MikroTik:  [admin@MikroTik] >  [admin@MikroTik] /ip>
+//
+// Horizontal-only whitespace ([ 	]) is used in path segments so the pattern
+// never spans newlines and cannot accidentally absorb preceding output lines.
+var promptRE = regexp.MustCompile(`(?m)^(\[\S+\]|[\w.-]+)(\([^)]+\))?([ 	]+[/\w.-]+)*[ 	]*[#>$][ 	]*$`)
 
 func (s *sshSession) Run(ctx context.Context, cmd string) (string, error) {
 	s.mu.Lock()
